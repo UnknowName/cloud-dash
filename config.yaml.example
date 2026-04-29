@@ -1,0 +1,47 @@
+server:
+  port: 9100
+
+cache:
+  ttl_seconds: 60
+
+# 实例列表本地文件缓存配置
+# enabled: 是否启用缓存，关闭后每次都从云API获取
+# ttl_seconds: 缓存有效时长（秒），默认86400（1天）
+# dir: 缓存文件存放目录，支持相对路径和绝对路径
+instance_cache:
+  enabled: true
+  ttl_seconds: 86400
+  dir: "./cache/instances"
+
+# 云资源监控数据采集间隔配置
+# interval: 采集周期数值
+# unit: 时间单位，支持 seconds / minutes / hours
+# 未配置或配置无效时，默认采用 5 minutes
+collection:
+  interval: 5
+  unit: minutes
+
+thread_pool:
+  max_workers: 5
+  max_retries: 3
+  retry_delay: 1.0
+
+providers:
+  - type: aliyun
+    name: aliyun-prod
+    region: cn-shenzhen
+    include_name: prod    # 可选，只采集名称包含该字符串的实例，不配置则获取所
+    credentials:
+      access_key_id: access_key_id
+      access_key_secret: access_key_secret
+    
+ # - type: huawei
+ #   name: huawei-prod
+ #   region: cn-north-4
+ #   credentials:
+ #     access_key_id: "sss"
+ #     access_key_secret: "ssss"
+ #     project_id: ""
+
+collectors:
+  - ecs

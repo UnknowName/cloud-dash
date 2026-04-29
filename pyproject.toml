@@ -1,0 +1,28 @@
+[project]
+name = "cloud-dash"
+version = "0.1.0"
+description = "Prometheus exporter for cloud platform monitoring metrics"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "prometheus_client>=0.21.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pyyaml>=6.0",
+    "alibabacloud-ecs20140526>=5.0.0",
+    "alibabacloud-cms20190101>=4.0.0",
+    "huaweicloudsdkecs>=3.1.0",
+    "huaweicloudsdkces>=3.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+cloud-dash = "main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
