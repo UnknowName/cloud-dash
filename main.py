@@ -7,6 +7,7 @@ from pathlib import Path
 from src.cache import MetricsCache
 from src.collectors.base import MetricCollector
 from src.collectors.ecs import EcsCollector
+from src.collectors.balance import BalanceCollector
 from src.config import load_config, ProviderConfig, ThreadPoolConfig, CollectionConfig, InstanceCacheConfig
 from src.exporter import Exporter
 from src.instance_cache import InstanceCache
@@ -29,6 +30,7 @@ PROVIDER_MAP: dict[str, type[CloudProvider]] = {
 # Collector 类型到类的映射表，新增资源类型只需在此注册
 COLLECTOR_MAP: dict[str, type[MetricCollector]] = {
     "ecs": EcsCollector,
+    "balance": BalanceCollector,
 }
 
 
@@ -95,15 +97,18 @@ def main() -> None:
     logger.info("已初始化 %d 个云平台 Provider", len(providers))
 
     # 根据配置创建采集器，通过 COLLECTOR_MAP 注册表匹配类型
+    # 需要 providers 的采集器统一传入 providers 列表
     collectors = []
     for name in config.collectors:
         collector_cls = COLLECTOR_MAP.get(name)
         if not collector_cls:
             logger.warning("未知的采集器类型: %s，跳过", name)
             continue
-        # ECS 采集器需要传入 providers，其他采集器可按需传参
-        if name == "ecs":
-            collectors.append(collector_cls(providers))
+        if name in ("ecs", "balance"):
+            if name == "balance":
+                collectors.append(collector_cls(providers, cache_ttl_seconds=config.cache.balance_cache_ttl_seconds))
+            else:
+                collectors.append(collector_cls(providers))
         else:
             collectors.append(collector_cls())
     logger.info("已初始化 %d 个指标采集器", len(collectors))

@@ -29,8 +29,20 @@ class MetricData:
     cpu_utilization_percent: float = 0.0
     memory_utilization_percent: float = 0.0
     disk_usage: dict[str, float] = field(default_factory=dict)
+    disk_read_bps: dict[str, float] = field(default_factory=dict)
+    disk_write_bps: dict[str, float] = field(default_factory=dict)
+    disk_read_iops: dict[str, float] = field(default_factory=dict)
+    disk_write_iops: dict[str, float] = field(default_factory=dict)
     network_in_rate_bytes_per_second: float = 0.0
     network_out_rate_bytes_per_second: float = 0.0
+
+
+@dataclass
+class BalanceInfo:
+    available_amount: float = 0.0
+    available_cash_amount: float = 0.0
+    credit_amount: float = 0.0
+    currency: str = "CNY"
 
 
 @dataclass
@@ -50,13 +62,13 @@ class CloudProvider(ABC):
         max_retries: int = DEFAULT_MAX_RETRIES,
         retry_delay: float = DEFAULT_RETRY_DELAY,
         collection_interval_seconds: int = DEFAULT_COLLECTION_INTERVAL_SECONDS,
-        include_name: str = "",
+        include_name: list[str] | None = None,
         instance_cache: InstanceCache | None = None,
     ) -> None:
         self.name = name
         self.region = region
         self.credentials = credentials
-        self.include_name = include_name
+        self.include_name: list[str] = include_name or []
         self._instance_cache = instance_cache
         # 采集间隔（秒），强制不低于最小限制
         self.collection_interval_seconds = max(
@@ -144,11 +156,15 @@ class CloudProvider(ABC):
     def _filter_by_name(self, instances: list[InstanceInfo]) -> list[InstanceInfo]:
         if not self.include_name:
             return instances
-        return [ins for ins in instances if self.include_name in ins.instance_name]
+        # 多关键词 OR 逻辑：实例名包含任一关键词即保留（区分大小写）
+        return [ins for ins in instances if any(kw in ins.instance_name for kw in self.include_name)]
 
     @abstractmethod
     def get_metrics(self, instances: list[InstanceInfo]) -> list[MetricData]:
         ...
+
+    def get_balance(self) -> BalanceInfo | None:
+        return None
 
     def collect(self) -> MetricResult:
         instances = self.get_instances()

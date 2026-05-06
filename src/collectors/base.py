@@ -6,6 +6,8 @@ from prometheus_client.core import GaugeMetricFamily
 
 
 class MetricCollector(ABC):
+    no_cache: bool = False
+
     @abstractmethod
     def collect(self) -> list[GaugeMetricFamily]:
         ...

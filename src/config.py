@@ -22,6 +22,7 @@ class ServerConfig:
 @dataclass
 class CacheConfig:
     ttl_seconds: int = 60
+    balance_cache_ttl_seconds: int = 1800
 
 
 @dataclass
@@ -72,7 +73,7 @@ class ProviderConfig:
     type: str = ""
     name: str = ""
     region: str = ""
-    include_name: str = ""
+    include_name: list[str] = field(default_factory=list)
     credentials: CredentialsConfig = field(default_factory=CredentialsConfig)
 
 
@@ -121,6 +122,12 @@ def load_config(config_path: str | Path) -> AppConfig:
 
     providers = []
     for i, p in enumerate(raw.get("providers", [])):
+        # 兼容旧配置：include_name 为字符串时自动转为单元素列表
+        raw_include = p.get("include_name")
+        if isinstance(raw_include, str):
+            p["include_name"] = [raw_include] if raw_include else []
+        elif raw_include is None:
+            p["include_name"] = []
         creds_data = p.pop("credentials", {})
         creds = CredentialsConfig(**creds_data)
         provider_cfg = ProviderConfig(credentials=creds, **p)

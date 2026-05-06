@@ -16,6 +16,13 @@ ECS_METRICS = {
 
 DISK_METRIC = ("cloud_ecs_disk_utilization_percent", "Disk utilization percentage per disk device")
 
+DISK_IO_METRICS = {
+    "disk_read_bps": ("cloud_ecs_disk_read_bps_bytes_per_second", "Disk read throughput in bytes per second"),
+    "disk_write_bps": ("cloud_ecs_disk_write_bps_bytes_per_second", "Disk write throughput in bytes per second"),
+    "disk_read_iops": ("cloud_ecs_disk_read_iops_per_second", "Disk read IOPS"),
+    "disk_write_iops": ("cloud_ecs_disk_write_iops_per_second", "Disk write IOPS"),
+}
+
 LABEL_NAMES = ["cloud", "instance_id", "instance_name", "region"]
 
 DISK_LABEL_NAMES = ["cloud", "instance_id", "instance_name", "region", "disk"]
@@ -47,6 +54,11 @@ class EcsCollector(MetricCollector):
         disk_metric_name, disk_help_text = DISK_METRIC
         disk_gauge = GaugeMetricFamily(disk_metric_name, disk_help_text, labels=DISK_LABEL_NAMES)
 
+        # 磁盘IO指标使用独立的 Gauge，包含 disk 标签
+        disk_io_gauges: dict[str, GaugeMetricFamily] = {}
+        for attr_name, (metric_name, help_text) in DISK_IO_METRICS.items():
+            disk_io_gauges[attr_name] = GaugeMetricFamily(metric_name, help_text, labels=DISK_LABEL_NAMES)
+
         for provider in self._providers:
             result = provider.collect()
             for metric_data in result.metrics:
@@ -66,6 +78,14 @@ class EcsCollector(MetricCollector):
                     disk_labels = base_labels + [disk_id]
                     disk_gauge.add_metric(disk_labels, _safe_float(usage_percent))
 
+                # 磁盘IO指标：遍历每块磁盘，添加 disk 标签
+                for attr_name, gauge in disk_io_gauges.items():
+                    disk_io_data = getattr(metric_data, attr_name, {})
+                    for disk_id, value in disk_io_data.items():
+                        disk_labels = base_labels + [disk_id]
+                        gauge.add_metric(disk_labels, _safe_float(value))
+
         result_gauges = list(gauges.values())
         result_gauges.append(disk_gauge)
+        result_gauges.extend(disk_io_gauges.values())
         return result_gauges

@@ -11,8 +11,10 @@ dependencies = [
     "pyyaml>=6.0",
     "alibabacloud-ecs20140526>=5.0.0",
     "alibabacloud-cms20190101>=4.0.0",
+    "alibabacloud-bssopenapi20171214>=5.0.0",
     "huaweicloudsdkecs>=3.1.0",
     "huaweicloudsdkces>=3.1.0",
+    "huaweicloudsdkbss>=3.1.0",
 ]
 
 [project.optional-dependencies]

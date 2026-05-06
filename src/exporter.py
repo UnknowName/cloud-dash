@@ -61,7 +61,9 @@ class _CachedMetricsCollector:
         return []
 
     def collect(self) -> list[Metric]:
-        return self._cache.get_metrics()
+        cached = self._cache.get_metrics()
+        realtime = self._cache.get_realtime_metrics()
+        return cached + realtime
 
 
 def _create_app(cache: MetricsCache, providers: list[CloudProvider]) -> FastAPI:

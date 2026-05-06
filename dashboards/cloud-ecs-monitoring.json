@@ -63,7 +63,7 @@
       }
     ]
   },
-  "description": "云服务器 ECS 资源监控仪表盘 — CPU、内存、磁盘利用率及网络 I/O 速率",
+  "description": "云服务器 ECS 资源监控仪表盘 — CPU、内存、磁盘利用率、网络 I/O 速率及云平台余额",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -84,9 +84,7 @@
       "description": "所有实例的平均 CPU 利用率",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
+          "color": { "mode": "thresholds" },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -107,11 +105,7 @@
         "graphMode": "area",
         "justifyMode": "auto",
         "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "textMode": "auto",
         "wideLayout": true
       },
@@ -131,9 +125,7 @@
       "description": "所有实例的平均内存利用率",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
+          "color": { "mode": "thresholds" },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -154,11 +146,7 @@
         "graphMode": "area",
         "justifyMode": "auto",
         "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "textMode": "auto",
         "wideLayout": true
       },
@@ -178,9 +166,7 @@
       "description": "所有实例各磁盘的平均利用率",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
+          "color": { "mode": "thresholds" },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -201,11 +187,7 @@
         "graphMode": "area",
         "justifyMode": "auto",
         "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "textMode": "auto",
         "wideLayout": true
       },
@@ -225,10 +207,7 @@
       "description": "当前监控的 ECS 实例总数",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "blue"
-          },
+          "color": { "mode": "fixed", "fixedColor": "blue" },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -247,11 +226,7 @@
         "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "textMode": "auto",
         "wideLayout": true
       },
@@ -269,24 +244,157 @@
     {
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
-      "id": 101,
+      "id": 200,
       "panels": [],
-      "title": "资源利用率趋势",
+      "title": "云平台余额",
       "type": "row"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "各 ECS 实例的 CPU 利用率随时间变化趋势",
+      "description": "各云平台账户当前可用余额，低于 100 元变黄，低于 50 元变红",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
+          "color": { "mode": "thresholds" },
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "red", "value": 50 }
+            ]
           },
+          "unit": "currencyCNY"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 6 },
+      "id": 201,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "cloud_account_available_amount{cloud=~\"$cloud\"}",
+          "legendFormat": "{{provider_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "可用余额",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "各云平台账户可用现金余额（不含信用额度），低于 100 元变黄，低于 50 元变红",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "red", "value": 50 }
+            ]
+          },
+          "unit": "currencyCNY"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 6 },
+      "id": 202,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "cloud_account_available_cash_amount{cloud=~\"$cloud\"}",
+          "legendFormat": "{{provider_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "可用现金",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "余额预警状态：可用余额低于 100 元触发黄色预警，低于 50 元触发红色预警",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "decimals": 2,
+          "mappings": [
+            {
+              "type": "special",
+              "options": {},
+              "id": "nanToNull"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "red", "value": 50 }
+            ]
+          },
+          "unit": "currencyCNY"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 6 },
+      "id": 203,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "cloud_account_available_amount{cloud=~\"$cloud\"}",
+          "legendFormat": "{{provider_name}} 预警",
+          "refId": "A"
+        }
+      ],
+      "title": "余额预警",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "各云平台账户余额随时间变化趋势，含可用余额、可用现金及信用额度",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
-            "axisLabel": "利用率",
+            "axisLabel": "金额（元）",
             "axisPlacement": "auto",
             "barAlignment": 0,
             "drawStyle": "line",
@@ -306,6 +414,102 @@
             }
           },
           "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 50 }
+            ]
+          },
+          "unit": "currencyCNY"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*信用额度.*" },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": { "fill": "dash", "dash": [10, 10] }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 11 },
+      "id": 204,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "min", "lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "cloud_account_available_amount{cloud=~\"$cloud\"}",
+          "legendFormat": "可用余额 - {{provider_name}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "cloud_account_available_cash_amount{cloud=~\"$cloud\"}",
+          "legendFormat": "可用现金 - {{provider_name}}",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "cloud_account_credit_amount{cloud=~\"$cloud\"}",
+          "legendFormat": "信用额度 - {{provider_name}}",
+          "refId": "C"
+        }
+      ],
+      "title": "余额使用趋势",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 },
+      "id": 101,
+      "panels": [],
+      "title": "资源利用率趋势",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "各 ECS 实例的 CPU 利用率随时间变化趋势",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "利用率",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "scheme",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line+area" }
+          },
+          "mappings": [],
           "max": 100,
           "min": 0,
           "thresholds": {
@@ -320,7 +524,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
       "id": 10,
       "options": {
         "legend": {
@@ -329,10 +533,7 @@
           "placement": "bottom",
           "showLegend": true
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "pluginVersion": "10.0.0",
       "targets": [
@@ -351,9 +552,7 @@
       "description": "各 ECS 实例的内存利用率随时间变化趋势",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
+          "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -373,9 +572,7 @@
             "showPoints": "never",
             "spanNulls": true,
             "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": {
-              "mode": "line+area"
-            }
+            "thresholdsStyle": { "mode": "line+area" }
           },
           "mappings": [],
           "max": 100,
@@ -392,7 +589,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
       "id": 11,
       "options": {
         "legend": {
@@ -401,10 +598,7 @@
           "placement": "bottom",
           "showLegend": true
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "pluginVersion": "10.0.0",
       "targets": [
@@ -423,9 +617,7 @@
       "description": "各 ECS 实例每块磁盘的利用率随时间变化趋势",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
+          "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -445,9 +637,7 @@
             "showPoints": "never",
             "spanNulls": true,
             "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": {
-              "mode": "line+area"
-            }
+            "thresholdsStyle": { "mode": "line+area" }
           },
           "mappings": [],
           "max": 100,
@@ -464,7 +654,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
       "id": 12,
       "options": {
         "legend": {
@@ -473,10 +663,7 @@
           "placement": "bottom",
           "showLegend": true
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "pluginVersion": "10.0.0",
       "targets": [
@@ -495,9 +682,7 @@
       "description": "各 ECS 实例的网络入站与出站速率",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
+          "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -517,9 +702,7 @@
             "showPoints": "never",
             "spanNulls": true,
             "stacking": { "group": "A", "mode": "none" },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
+            "thresholdsStyle": { "mode": "off" }
           },
           "mappings": [],
           "min": 0,
@@ -535,15 +718,12 @@
           {
             "matcher": { "id": "byRegexp", "options": ".*入站.*" },
             "properties": [
-              {
-                "id": "custom.transform",
-                "value": "negative-Y"
-              }
+              { "id": "custom.transform", "value": "negative-Y" }
             ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
       "id": 13,
       "options": {
         "legend": {
@@ -552,10 +732,7 @@
           "placement": "bottom",
           "showLegend": true
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "pluginVersion": "10.0.0",
       "targets": [
@@ -576,8 +753,158 @@
       "type": "timeseries"
     },
     {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "各 ECS 实例每块磁盘的读写吞吐量",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "吞吐量",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "scheme",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "unit": "Bps"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*读取.*" },
+            "properties": [
+              { "id": "custom.transform", "value": "negative-Y" }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "id": 40,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max", "lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "cloud_ecs_disk_read_bps_bytes_per_second{cloud=~\"$cloud\", region=~\"$region\", disk=~\"$disk\"}",
+          "legendFormat": "⬇ 读取 {{instance_name}} {{disk}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "cloud_ecs_disk_write_bps_bytes_per_second{cloud=~\"$cloud\", region=~\"$region\", disk=~\"$disk\"}",
+          "legendFormat": "⬆ 写入 {{instance_name}} {{disk}}",
+          "refId": "B"
+        }
+      ],
+      "title": "磁盘 IO 吞吐量",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "各 ECS 实例每块磁盘的读写 IOPS",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "IOPS",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "scheme",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*读取.*" },
+            "properties": [
+              { "id": "custom.transform", "value": "negative-Y" }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "id": 41,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max", "lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "cloud_ecs_disk_read_iops_per_second{cloud=~\"$cloud\", region=~\"$region\", disk=~\"$disk\"}",
+          "legendFormat": "⬇ 读取 {{instance_name}} {{disk}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "cloud_ecs_disk_write_iops_per_second{cloud=~\"$cloud\", region=~\"$region\", disk=~\"$disk\"}",
+          "legendFormat": "⬆ 写入 {{instance_name}} {{disk}}",
+          "refId": "B"
+        }
+      ],
+      "title": "磁盘 IO IOPS",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 44 },
       "id": 102,
       "panels": [],
       "title": "实时仪表",
@@ -588,9 +915,7 @@
       "description": "各实例当前 CPU 利用率仪表盘",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
+          "color": { "mode": "thresholds" },
           "mappings": [],
           "max": 100,
           "min": 0,
@@ -606,17 +931,13 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 23 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 45 },
       "id": 20,
       "options": {
         "minVizHeight": 75,
         "minVizWidth": 75,
         "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "showThresholdLabels": false,
         "showThresholdMarkers": true,
         "sizing": "auto"
@@ -638,9 +959,7 @@
       "description": "各实例当前内存利用率仪表盘",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
+          "color": { "mode": "thresholds" },
           "mappings": [],
           "max": 100,
           "min": 0,
@@ -656,17 +975,13 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 23 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 45 },
       "id": 21,
       "options": {
         "minVizHeight": 75,
         "minVizWidth": 75,
         "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "showThresholdLabels": false,
         "showThresholdMarkers": true,
         "sizing": "auto"
@@ -688,9 +1003,7 @@
       "description": "各实例每块磁盘当前利用率仪表盘",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
+          "color": { "mode": "thresholds" },
           "mappings": [],
           "max": 100,
           "min": 0,
@@ -706,17 +1019,13 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 23 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 45 },
       "id": 22,
       "options": {
         "minVizHeight": 75,
         "minVizWidth": 75,
         "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "showThresholdLabels": false,
         "showThresholdMarkers": true,
         "sizing": "auto"
@@ -735,7 +1044,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 53 },
       "id": 103,
       "panels": [],
       "title": "实例详情",
@@ -746,14 +1055,10 @@
       "description": "所有 ECS 实例的当前指标汇总表",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
+          "color": { "mode": "thresholds" },
           "custom": {
             "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
+            "cellOptions": { "type": "auto" },
             "filterable": true,
             "inspect": false
           },
@@ -771,102 +1076,44 @@
           {
             "matcher": { "id": "byName", "options": "CPU利用率" },
             "properties": [
-              {
-                "id": "unit",
-                "value": "percent"
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-background",
-                  "mode": "gradient"
-                }
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              }
+              { "id": "unit", "value": "percent" },
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "gradient" } },
+              { "id": "custom.width", "value": 130 }
             ]
           },
           {
             "matcher": { "id": "byName", "options": "内存利用率" },
             "properties": [
-              {
-                "id": "unit",
-                "value": "percent"
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-background",
-                  "mode": "gradient"
-                }
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              }
+              { "id": "unit", "value": "percent" },
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "gradient" } },
+              { "id": "custom.width", "value": 130 }
             ]
           },
           {
             "matcher": { "id": "byName", "options": "系统盘利用率C" },
             "properties": [
-              {
-                "id": "unit",
-                "value": "percent"
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-background",
-                  "mode": "gradient"
-                }
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              }
+              { "id": "unit", "value": "percent" },
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "gradient" } },
+              { "id": "custom.width", "value": 130 }
             ]
           },
           {
             "matcher": { "id": "byName", "options": "数据盘利用率" },
             "properties": [
-              {
-                "id": "unit",
-                "value": "percent"
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-background",
-                  "mode": "gradient"
-                }
-              },
-              {
-                "id": "custom.width",
-                "value": 130
-              }
+              { "id": "unit", "value": "percent" },
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "gradient" } },
+              { "id": "custom.width", "value": 130 }
             ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 54 },
       "id": 30,
       "options": {
         "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": ["sum"],
-          "show": false
-        },
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
         "showHeader": true,
-        "sortBy": [
-          {
-            "desc": true,
-            "displayName": "CPU 利用率"
-          }
-        ]
+        "sortBy": [{ "desc": true, "displayName": "CPU 利用率" }]
       },
       "pluginVersion": "10.0.0",
       "targets": [
@@ -907,55 +1154,28 @@
       "transformations": [
         {
           "id": "joinByField",
-          "options": {
-            "byField": "instance_id",
-            "mode": "outer"
-          }
+          "options": { "byField": "instance_id", "mode": "outer" }
         },
         {
           "id": "organize",
           "options": {
             "excludeByName": {
-              "Time": true,
-              "Time #B": true,
-              "Time #C": true,
-              "Time #D": true,
-              "__name__": true,
-              "__name__ #B": true,
-              "__name__ #C": true,
-              "__name__ #D": true,
-              "instance_id #B": true,
-              "instance_id #C": true,
-              "instance_id #D": true,
-              "cloud #B": true,
-              "cloud #C": true,
-              "cloud #D": true,
-              "region #B": true,
-              "region #C": true,
-              "region #D": true,
-              "instance_name #B": true,
-              "instance_name #C": true,
-              "instance_name #D": true
+              "Time": true, "Time #B": true, "Time #C": true, "Time #D": true,
+              "__name__": true, "__name__ #B": true, "__name__ #C": true, "__name__ #D": true,
+              "instance_id #B": true, "instance_id #C": true, "instance_id #D": true,
+              "cloud #B": true, "cloud #C": true, "cloud #D": true,
+              "region #B": true, "region #C": true, "region #D": true,
+              "instance_name #B": true, "instance_name #C": true, "instance_name #D": true
             },
             "indexByName": {
-              "云厂商": 0,
-              "区域": 1,
-              "实例ID": 2,
-              "instance_name": 3,
-              "CPU利用率": 4,
-              "内存利用率": 5,
-              "系统盘利用率C": 6,
-              "数据盘利用率": 7
+              "云厂商": 0, "区域": 1, "实例ID": 2, "instance_name": 3,
+              "CPU利用率": 4, "内存利用率": 5, "系统盘利用率C": 6, "数据盘利用率": 7
             },
             "renameByName": {
-              "cloud": "云厂商",
-              "region": "区域",
-              "instance_id": "实例ID",
+              "cloud": "云厂商", "region": "区域", "instance_id": "实例ID",
               "instance_name": "instance_name",
-              "Value #A": "CPU利用率",
-              "Value #B": "内存利用率",
-              "Value #C": "系统盘利用率C",
-              "Value #D": "数据盘利用率"
+              "Value #A": "CPU利用率", "Value #B": "内存利用率",
+              "Value #C": "系统盘利用率C", "Value #D": "数据盘利用率"
             }
           }
         }
@@ -966,7 +1186,7 @@
   "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["cloud", "ecs", "monitoring", "prometheus"],
+  "tags": ["cloud", "ecs", "monitoring", "prometheus", "balance"],
   "templating": {
     "list": [
       {

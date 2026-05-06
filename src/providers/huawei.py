@@ -4,6 +4,8 @@ import logging
 from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
 
+from huaweicloudsdkbss.v2 import BssClient as HwBssClient
+from huaweicloudsdkbss.v2 import ShowCustomerAccountBalancesRequest
 from huaweicloudsdkcore.auth.credentials import BasicCredentials
 from huaweicloudsdkecs.v2 import EcsClient as HwEcsClient
 from huaweicloudsdkecs.v2 import ListServersDetailsRequest
@@ -12,7 +14,7 @@ from huaweicloudsdkces.v1 import ShowMetricDataRequest
 from huaweicloudsdkces.v2 import CesClient as HwCesV2Client
 from huaweicloudsdkces.v2 import ListAgentDimensionInfoRequest
 
-from .base import CloudProvider, InstanceInfo, MetricData, DEFAULT_COLLECTION_INTERVAL_SECONDS
+from .base import CloudProvider, InstanceInfo, MetricData, BalanceInfo, DEFAULT_COLLECTION_INTERVAL_SECONDS
 from ..pool import DEFAULT_MAX_WORKERS, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY
 from ..instance_cache import InstanceCache
 
@@ -25,10 +27,25 @@ HUAWEI_METRIC_DIMS = {
     "network_out_rate_bytes_per_second": ("network_outgoing_bytes_aggregate_rate", "网络流出速率"),
 }
 
+HUAWEI_DISK_IO_AGENT_METRICS = {
+    "disk_read_bps": "disk_agt_read_bytes_rate",
+    "disk_write_bps": "disk_agt_write_bytes_rate",
+    "disk_read_iops": "disk_agt_read_requests_rate",
+    "disk_write_iops": "disk_agt_write_requests_rate",
+}
+
+HUAWEI_DISK_IO_BASIC_METRICS = {
+    "disk_read_bps": "disk_read_bytes_rate",
+    "disk_write_bps": "disk_write_bytes_rate",
+    "disk_read_iops": "disk_read_requests_rate",
+    "disk_write_iops": "disk_write_requests_rate",
+}
+
 METRIC_PRIORITIES = {
     "cpu_utilization_percent": 1,
     "memory_utilization_percent": 2,
     "disk_usage": 3,
+    "disk_io": 3,
     "network_in_rate_bytes_per_second": 4,
     "network_out_rate_bytes_per_second": 4,
 }
@@ -44,7 +61,7 @@ class HuaweiProvider(CloudProvider):
         max_retries: int = DEFAULT_MAX_RETRIES,
         retry_delay: float = DEFAULT_RETRY_DELAY,
         collection_interval_seconds: int = DEFAULT_COLLECTION_INTERVAL_SECONDS,
-        include_name: str = "",
+        include_name: list[str] | None = None,
         instance_cache: InstanceCache | None = None,
     ) -> None:
         super().__init__(
@@ -60,6 +77,7 @@ class HuaweiProvider(CloudProvider):
         self._ecs_client = self._create_ecs_client()
         self._ces_v1_client = self._create_ces_v1_client()
         self._ces_v2_client = self._create_ces_v2_client()
+        self._bss_client = self._create_bss_client()
 
     def _create_ecs_client(self) -> HwEcsClient:
         from huaweicloudsdkcore.http.http_config import HttpConfig
@@ -97,17 +115,33 @@ class HuaweiProvider(CloudProvider):
                 .with_http_config(config)
                 .build())
 
+    def _create_bss_client(self) -> HwBssClient:
+        # BSS 为全局服务，使用 cn-north-1 区域
+        from huaweicloudsdkcore.http.http_config import HttpConfig
+        from huaweicloudsdkbss.v2.region.bss_region import BssRegion
+
+        config = HttpConfig.get_default_config()
+        config.ignore_ssl_verification = True
+        return (HwBssClient.new_builder()
+                .with_credentials(self._credentials)
+                .with_region(BssRegion.value_of("cn-north-1"))
+                .with_http_config(config)
+                .build())
+
     def list_instances(self) -> list[InstanceInfo]:
         limit = 100
         offset = 1
         all_instances: list[InstanceInfo] = []
+
+        # 单关键词时使用 API 侧过滤，多关键词时获取全部后本地过滤
+        name_filter = self.include_name[0] if len(self.include_name) == 1 else None
 
         try:
             while True:
                 request = ListServersDetailsRequest(
                     limit=limit,
                     offset=offset,
-                    name=self.include_name or None,
+                    name=name_filter,
                 )
                 response = self._ecs_client.list_servers_details(request)
                 page_servers = response.servers
@@ -117,10 +151,13 @@ class HuaweiProvider(CloudProvider):
                         instance_name=server.name,
                         region=self.region,
                     ))
-                # 当前页数据量小于 limit，说明已是最后一页
                 if len(page_servers) < limit:
                     break
                 offset += limit
+
+            # 多关键词时在本地进行 OR 过滤
+            if len(self.include_name) > 1:
+                all_instances = self._filter_by_name(all_instances)
 
             logger.info("华为云获取实例列表完成，共 %d 个实例", len(all_instances))
             return all_instances
@@ -160,6 +197,18 @@ class HuaweiProvider(CloudProvider):
             )
             disk_futures[instance.instance_id] = future
 
+        # 磁盘IO指标：每个实例提交一个查询任务，返回每块磁盘的IO数据
+        disk_io_futures: dict[str, Future] = {}
+        for instance in instances:
+            priority = METRIC_PRIORITIES.get("disk_io", 5)
+            future = self._pool.submit(
+                self._query_disk_io,
+                instance.instance_id, from_time, to_time,
+                priority=priority,
+                cycle_id=cycle_id,
+            )
+            disk_io_futures[instance.instance_id] = future
+
         result = []
         for instance in instances:
             metric_values: dict[str, float] = {}
@@ -191,7 +240,26 @@ class HuaweiProvider(CloudProvider):
                         instance.instance_id, e,
                     )
 
-            if not metric_values and not disk_usage:
+            # 获取每块磁盘的IO数据
+            disk_io_data: dict[str, dict[str, float]] = {
+                "disk_read_bps": {},
+                "disk_write_bps": {},
+                "disk_read_iops": {},
+                "disk_write_iops": {},
+            }
+            disk_io_future = disk_io_futures.get(instance.instance_id)
+            if disk_io_future:
+                try:
+                    disk_io_result = disk_io_future.result()
+                    if disk_io_result is not None:
+                        disk_io_data = disk_io_result
+                except Exception as e:
+                    logger.error(
+                        "华为云查询磁盘IO最终失败 (instance=%s): %s",
+                        instance.instance_id, e,
+                    )
+
+            if not metric_values and not disk_usage and not any(disk_io_data.values()):
                 continue
 
             result.append(MetricData(
@@ -199,6 +267,10 @@ class HuaweiProvider(CloudProvider):
                 cpu_utilization_percent=metric_values.get("cpu_utilization_percent", 0.0),
                 memory_utilization_percent=metric_values.get("memory_utilization_percent", 0.0),
                 disk_usage=disk_usage,
+                disk_read_bps=disk_io_data.get("disk_read_bps", {}),
+                disk_write_bps=disk_io_data.get("disk_write_bps", {}),
+                disk_read_iops=disk_io_data.get("disk_read_iops", {}),
+                disk_write_iops=disk_io_data.get("disk_write_iops", {}),
                 network_in_rate_bytes_per_second=metric_values.get("network_in_rate_bytes_per_second", 0.0),
                 network_out_rate_bytes_per_second=metric_values.get("network_out_rate_bytes_per_second", 0.0),
             ))
@@ -326,3 +398,107 @@ class HuaweiProvider(CloudProvider):
                 instance_id, e,
             )
         return {}
+
+    def _query_disk_io(
+        self,
+        instance_id: str,
+        from_time: str,
+        to_time: str,
+    ) -> dict[str, dict[str, float]]:
+        """查询每块磁盘的IO数据，返回 {指标名: {磁盘标识符: 值}} 的映射
+
+        优先通过挂载点维度查询 Agent 指标，无挂载点时回退到基础指标
+        """
+        result: dict[str, dict[str, float]] = {
+            "disk_read_bps": {},
+            "disk_write_bps": {},
+            "disk_read_iops": {},
+            "disk_write_iops": {},
+        }
+
+        mount_points = self._discover_mount_points(instance_id)
+        if mount_points:
+            # 有挂载点信息：对每个挂载点查询 Agent 指标
+            for mount_point_hash, mount_point_path in mount_points:
+                for attr_name, metric_name in HUAWEI_DISK_IO_AGENT_METRICS.items():
+                    try:
+                        request = ShowMetricDataRequest(
+                            metric_name=metric_name,
+                            namespace="SYS.ECS",
+                            dim_0=f"instance_id,{instance_id}",
+                            dim_1=f"mount_point,{mount_point_hash}",
+                            _from=from_time,
+                            to=to_time,
+                            period=1,
+                            filter="average",
+                        )
+                        response = self._ces_v1_client.show_metric_data(request)
+                        datapoints = response.datapoints
+                        if datapoints:
+                            result[attr_name][mount_point_path] = float(datapoints[-1].average)
+                    except Exception as e:
+                        logger.warning(
+                            "华为云查询挂载点 %s 磁盘IO失败 (instance=%s, metric=%s): %s",
+                            mount_point_path, instance_id, metric_name, e,
+                        )
+        else:
+            # 无挂载点信息：回退到基础指标（实例级聚合）
+            for attr_name, metric_name in HUAWEI_DISK_IO_BASIC_METRICS.items():
+                try:
+                    request = ShowMetricDataRequest(
+                        metric_name=metric_name,
+                        namespace="SYS.ECS",
+                        dim_0=f"instance_id,{instance_id}",
+                        _from=from_time,
+                        to=to_time,
+                        period=1,
+                        filter="average",
+                    )
+                    response = self._ces_v1_client.show_metric_data(request)
+                    datapoints = response.datapoints
+                    if datapoints:
+                        result[attr_name]["total"] = float(datapoints[-1].average)
+                except Exception as e:
+                    logger.warning(
+                        "华为云查询基础磁盘IO失败 (instance=%s, metric=%s): %s",
+                        instance_id, metric_name, e,
+                    )
+
+        return result
+
+    # 华为云账户类型映射：1=余额, 2=信用, 5=奖励金, 7=保证金
+    _ACCOUNT_TYPE_BALANCE = 1
+    _ACCOUNT_TYPE_CREDIT = 2
+
+    def get_balance(self) -> BalanceInfo | None:
+        request = ShowCustomerAccountBalancesRequest()
+        try:
+            response = self._bss_client.show_customer_account_balances(request)
+        except Exception as e:
+            logger.error("华为云查询账户余额失败: %s", e)
+            return None
+
+        account_balances = response.account_balances
+        if not account_balances:
+            return None
+
+        cash_amount = 0.0
+        credit_amount = 0.0
+        currency = "CNY"
+
+        for item in account_balances:
+            account_type = item.account_type
+            amount = float(item.amount) if item.amount else 0.0
+            if account_type == self._ACCOUNT_TYPE_BALANCE:
+                cash_amount = amount
+            elif account_type == self._ACCOUNT_TYPE_CREDIT:
+                credit_amount = amount
+            if item.currency:
+                currency = item.currency
+
+        return BalanceInfo(
+            available_amount=cash_amount + credit_amount,
+            available_cash_amount=cash_amount,
+            credit_amount=credit_amount,
+            currency=currency,
+        )

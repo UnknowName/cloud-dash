@@ -84,6 +84,19 @@ wheels = [
 ]
 
 [[package]]
+name = "alibabacloud-bssopenapi20171214"
+version = "5.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "alibabacloud-tea-openapi" },
+    { name = "darabonba-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2c/35/7af01194b22ab238a2853ef9dc938f6d39e67bc44fc6c43bab398dd387d5/alibabacloud_bssopenapi20171214-5.1.1.tar.gz", hash = "sha256:35ed0f236bf59864a8ceab5d9109c2aae37e0a4a58d50caaeabf551a405614cc", size = 163803, upload-time = "2026-01-29T06:14:33.689Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a1/37/31e9778e5fb6f09854d5cea446ab518ed05d9127fe7b5cb0fa66706c395f/alibabacloud_bssopenapi20171214-5.1.1-py3-none-any.whl", hash = "sha256:4339e9c47a5b4a134fed97244f143ab3da74a9de3a4effc2b0ff096447c3c781", size = 403480, upload-time = "2026-01-29T06:14:32.157Z" },
+]
+
+[[package]]
 name = "alibabacloud-cms20190101"
 version = "4.0.8"
 source = { registry = "https://pypi.org/simple" }
@@ -328,9 +341,11 @@ name = "cloud-dash"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "alibabacloud-bssopenapi20171214" },
     { name = "alibabacloud-cms20190101" },
     { name = "alibabacloud-ecs20140526" },
     { name = "fastapi" },
+    { name = "huaweicloudsdkbss" },
     { name = "huaweicloudsdkces" },
     { name = "huaweicloudsdkecs" },
     { name = "prometheus-client" },
@@ -346,10 +361,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "alibabacloud-bssopenapi20171214", specifier = ">=5.0.0" },
     { name = "alibabacloud-cms20190101", specifier = ">=4.0.0" },
     { name = "alibabacloud-ecs20140526", specifier = ">=5.0.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
+    { name = "huaweicloudsdkbss", specifier = ">=3.1.0" },
     { name = "huaweicloudsdkces", specifier = ">=3.1.0" },
     { name = "huaweicloudsdkecs", specifier = ">=3.1.0" },
     { name = "prometheus-client", specifier = ">=0.21.0" },
@@ -562,6 +579,17 @@ wheels = [
 ]
 
 [[package]]
+name = "huaweicloudsdkbss"
+version = "3.1.193"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huaweicloudsdkcore" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/e2/09dd9cef0ec748c9d2331475e4c0a7f91b2cfe118848c30db361ff7dec96/huaweicloudsdkbss-3.1.193-py3-none-any.whl", hash = "sha256:c48670f29d9611c92e61f34064513873b25c205f0746590f1be9894bbde7e0d6", size = 674579, upload-time = "2026-04-30T08:20:09.257Z" },
+]
+
+[[package]]
 name = "huaweicloudsdkces"
 version = "3.1.192"
 source = { registry = "https://pypi.org/simple" }
@@ -574,7 +602,7 @@ wheels = [
 
 [[package]]
 name = "huaweicloudsdkcore"
-version = "3.1.192"
+version = "3.1.193"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -587,7 +615,7 @@ dependencies = [
     { name = "six" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/44/4fd3a4ae3034e64a47c3dfd57057278f4ef22828f6c6e8a846d13afcc489/huaweicloudsdkcore-3.1.192-py3-none-any.whl", hash = "sha256:69de5f5283abdcec69a7a428a1fc51cc5dd6530c3074c512f2a115cb3c141956", size = 69555, upload-time = "2026-04-24T08:39:06.383Z" },
+    { url = "https://files.pythonhosted.org/packages/93/3e/5a76533a0b826f7726a527f554c149ecfce5929cb62ecce1b88a9d8e0375/huaweicloudsdkcore-3.1.193-py3-none-any.whl", hash = "sha256:aa92022965a08ba41713c6f14427d60aeb4f49b2c9d76f225ef9258aa1b636fd", size = 69555, upload-time = "2026-04-30T08:20:56.51Z" },
 ]
 
 [[package]]

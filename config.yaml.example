@@ -3,6 +3,7 @@ server:
 
 cache:
   ttl_seconds: 60
+  balance_cache_ttl_seconds: 1800
 
 # 实例列表本地文件缓存配置
 # enabled: 是否启用缓存，关闭后每次都从云API获取
@@ -45,3 +46,4 @@ providers:
 
 collectors:
   - ecs
+  - balance

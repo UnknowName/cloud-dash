@@ -32,7 +32,13 @@ class MetricsCache:
         self._collection_interval_seconds = max(
             collection_interval_seconds, MIN_COLLECTION_INTERVAL_SECONDS
         )
-        self._collectors = collectors
+        self._cached_collectors: list[MetricCollector] = []
+        self._realtime_collectors: list[MetricCollector] = []
+        for c in collectors:
+            if getattr(c, "no_cache", False):
+                self._realtime_collectors.append(c)
+            else:
+                self._cached_collectors.append(c)
         self._lock = threading.Lock()
         # 每个采集器独立缓存，key 为采集器类名
         self._collector_cache: dict[str, list[GaugeMetricFamily]] = {}
@@ -95,6 +101,17 @@ class MetricsCache:
                 result.extend(metrics)
             return result
 
+    def get_realtime_metrics(self) -> list[GaugeMetricFamily]:
+        result: list[GaugeMetricFamily] = []
+        for collector in self._realtime_collectors:
+            collector_name = collector.__class__.__name__
+            try:
+                collected = collector.collect()
+                result.extend(collected)
+            except Exception as e:
+                logger.error("实时采集器 %s 采集失败: %s", collector_name, e)
+        return result
+
     def get_schedule_stats(self) -> ScheduleStats:
         return ScheduleStats(
             collection_interval_seconds=self._collection_interval_seconds,
@@ -130,7 +147,7 @@ class MetricsCache:
 
         logger.debug("开始第 %d 轮采集", cycle_id)
 
-        for collector in self._collectors:
+        for collector in self._cached_collectors:
             collector_name = collector.__class__.__name__
             try:
                 collected = collector.collect()
