@@ -14,7 +14,8 @@ from alibabacloud_ecs20140526.client import Client as EcsClient
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_tea_util import models as util_models
 
-from .base import CloudProvider, InstanceInfo, MetricData, BalanceInfo, DEFAULT_COLLECTION_INTERVAL_SECONDS
+from .base import CloudProvider, InstanceInfo, MetricData, BalanceInfo, ResourcePackageInfo, DEFAULT_COLLECTION_INTERVAL_SECONDS
+from .unit_converter import normalize_amounts
 from ..pool import DEFAULT_MAX_WORKERS, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY
 from ..instance_cache import InstanceCache
 
@@ -49,6 +50,8 @@ METRIC_PRIORITIES = {
     "network_in_rate_bytes_per_second": 4,
     "network_out_rate_bytes_per_second": 4,
 }
+
+_BATCH_SIZE = 50
 
 
 class AliyunProvider(CloudProvider):
@@ -144,303 +147,256 @@ class AliyunProvider(CloudProvider):
             return []
 
     def get_metrics(self, instances: list[InstanceInfo]) -> list[MetricData]:
+        if not instances:
+            return []
+
         end_time = int(time.time() * 1000)
         start_time = end_time - self.collection_interval_seconds * 1000
-
         cycle_id = self.begin_collection_cycle()
 
-        # 非磁盘指标：每个实例每个指标提交一个查询任务
-        futures: dict[tuple[str, str], Future] = {}
-        for instance in instances:
-            for attr_name, metric_name in ALIYUN_METRIC_NAMES.items():
-                priority = METRIC_PRIORITIES.get(attr_name, 5)
-                future = self._pool.submit(
-                    self._query_metric,
-                    instance.instance_id, metric_name, start_time, end_time,
-                    priority=priority,
-                    cycle_id=cycle_id,
-                )
-                futures[(instance.instance_id, attr_name)] = future
+        instance_ids = [ins.instance_id for ins in instances]
+        batches = self._build_dimensions(instance_ids)
 
-        # 磁盘指标：每个实例提交一个查询任务，返回每块磁盘的使用率
-        disk_futures: dict[str, Future] = {}
-        for instance in instances:
+        # 基础指标（CPU/内存/网络）：每个指标每个批次提交一个查询任务
+        metric_futures: dict[tuple[str, int], Future] = {}
+        for attr_name, metric_name in ALIYUN_METRIC_NAMES.items():
+            priority = METRIC_PRIORITIES.get(attr_name, 5)
+            for batch_idx, (_, dims) in enumerate(batches):
+                future = self._pool.submit(
+                    self._query_metric_batch,
+                    metric_name, dims, start_time, end_time,
+                    priority=priority, cycle_id=cycle_id,
+                )
+                metric_futures[(attr_name, batch_idx)] = future
+
+        # 磁盘使用率：每个批次提交一个查询任务
+        disk_usage_futures: dict[int, Future] = {}
+        for batch_idx, (_, dims) in enumerate(batches):
             priority = METRIC_PRIORITIES.get("disk_usage", 5)
             future = self._pool.submit(
-                self._query_disk_usage,
-                instance.instance_id, start_time, end_time,
-                priority=priority,
-                cycle_id=cycle_id,
+                self._query_metric_with_device_batch,
+                "diskusage_utilization", dims, start_time, end_time,
+                priority=priority, cycle_id=cycle_id,
             )
-            disk_futures[instance.instance_id] = future
+            disk_usage_futures[batch_idx] = future
 
-        # 磁盘IO指标：每个实例提交一个查询任务，返回每块磁盘的IO数据
-        disk_io_futures: dict[str, Future] = {}
-        for instance in instances:
+        # 磁盘IO Agent指标：每个指标每个批次提交一个查询任务
+        disk_io_agent_futures: dict[tuple[str, int], Future] = {}
+        for attr_name, metric_name in ALIYUN_DISK_IO_AGENT_METRICS.items():
             priority = METRIC_PRIORITIES.get("disk_io", 5)
-            future = self._pool.submit(
-                self._query_disk_io,
-                instance.instance_id, start_time, end_time,
-                priority=priority,
-                cycle_id=cycle_id,
-            )
-            disk_io_futures[instance.instance_id] = future
+            for batch_idx, (_, dims) in enumerate(batches):
+                future = self._pool.submit(
+                    self._query_metric_with_device_batch,
+                    metric_name, dims, start_time, end_time,
+                    priority=priority, cycle_id=cycle_id,
+                )
+                disk_io_agent_futures[(attr_name, batch_idx)] = future
 
+        # 收集基础指标结果: {instance_id: {attr_name: value}}
+        metric_values: dict[str, dict[str, float]] = {}
+        for (attr_name, batch_idx), future in metric_futures.items():
+            try:
+                for iid, value in future.result().items():
+                    metric_values.setdefault(iid, {})[attr_name] = value
+            except Exception as e:
+                logger.error(
+                    "阿里云批量查询指标 %s 最终失败 (batch=%d): %s",
+                    attr_name, batch_idx, e,
+                )
+
+        # 收集磁盘使用率结果: {instance_id: {device: value}}
+        disk_usage_values: dict[str, dict[str, float]] = {}
+        for batch_idx, future in disk_usage_futures.items():
+            try:
+                for iid, device_map in future.result().items():
+                    disk_usage_values[iid] = device_map
+            except Exception as e:
+                logger.error(
+                    "阿里云批量查询磁盘使用率最终失败 (batch=%d): %s",
+                    batch_idx, e,
+                )
+
+        # 收集磁盘IO Agent指标结果: {instance_id: {attr_name: {device: value}}}
+        disk_io_values: dict[str, dict[str, dict[str, float]]] = {}
+        for (attr_name, batch_idx), future in disk_io_agent_futures.items():
+            try:
+                for iid, device_map in future.result().items():
+                    disk_io_values.setdefault(iid, {})
+                    disk_io_values[iid][attr_name] = device_map
+            except Exception as e:
+                logger.error(
+                    "阿里云批量查询磁盘IO Agent指标最终失败 (metric=%s, batch=%d): %s",
+                    attr_name, batch_idx, e,
+                )
+
+        # 磁盘IO回退：对无Agent数据的实例查询基础指标
+        instances_without_agent = [
+            iid for iid in instance_ids
+            if not any(disk_io_values.get(iid, {}).values())
+        ]
+        if instances_without_agent:
+            self._fill_disk_io_fallback(
+                instances_without_agent, start_time, end_time, cycle_id, disk_io_values,
+            )
+
+        # 按 instance 组装 MetricData
         result = []
         for instance in instances:
-            metric_values: dict[str, float] = {}
-            for attr_name in ALIYUN_METRIC_NAMES:
-                future = futures.get((instance.instance_id, attr_name))
-                if not future:
-                    continue
-                try:
-                    value = future.result()
-                    if value is not None:
-                        metric_values[attr_name] = value
-                except Exception as e:
-                    logger.error(
-                        "阿里云查询指标 %s 最终失败 (instance=%s): %s",
-                        attr_name, instance.instance_id, e,
-                    )
+            iid = instance.instance_id
+            mv = metric_values.get(iid, {})
+            du = disk_usage_values.get(iid, {})
+            dio = disk_io_values.get(iid, {})
 
-            # 获取每块磁盘的使用率
-            disk_usage: dict[str, float] = {}
-            disk_future = disk_futures.get(instance.instance_id)
-            if disk_future:
-                try:
-                    disk_result = disk_future.result()
-                    if disk_result is not None:
-                        disk_usage = disk_result
-                except Exception as e:
-                    logger.error(
-                        "阿里云查询磁盘使用率最终失败 (instance=%s): %s",
-                        instance.instance_id, e,
-                    )
-
-            # 获取每块磁盘的IO数据
-            disk_io_data: dict[str, dict[str, float]] = {
-                "disk_read_bps": {},
-                "disk_write_bps": {},
-                "disk_read_iops": {},
-                "disk_write_iops": {},
-            }
-            disk_io_future = disk_io_futures.get(instance.instance_id)
-            if disk_io_future:
-                try:
-                    disk_io_result = disk_io_future.result()
-                    if disk_io_result is not None:
-                        disk_io_data = disk_io_result
-                except Exception as e:
-                    logger.error(
-                        "阿里云查询磁盘IO最终失败 (instance=%s): %s",
-                        instance.instance_id, e,
-                    )
-
-            if not metric_values and not disk_usage and not any(disk_io_data.values()):
+            if not mv and not du and not any(dio.values()):
                 continue
 
             result.append(MetricData(
                 instance=instance,
-                cpu_utilization_percent=metric_values.get("cpu_utilization_percent", 0.0),
-                memory_utilization_percent=metric_values.get("memory_utilization_percent", 0.0),
-                disk_usage=disk_usage,
-                disk_read_bps=disk_io_data.get("disk_read_bps", {}),
-                disk_write_bps=disk_io_data.get("disk_write_bps", {}),
-                disk_read_iops=disk_io_data.get("disk_read_iops", {}),
-                disk_write_iops=disk_io_data.get("disk_write_iops", {}),
-                network_in_rate_bytes_per_second=metric_values.get("network_in_rate_bytes_per_second", 0.0),
-                network_out_rate_bytes_per_second=metric_values.get("network_out_rate_bytes_per_second", 0.0),
+                cpu_utilization_percent=mv.get("cpu_utilization_percent", 0.0),
+                memory_utilization_percent=mv.get("memory_utilization_percent", 0.0),
+                disk_usage=du,
+                disk_read_bps=dio.get("disk_read_bps", {}),
+                disk_write_bps=dio.get("disk_write_bps", {}),
+                disk_read_iops=dio.get("disk_read_iops", {}),
+                disk_write_iops=dio.get("disk_write_iops", {}),
+                network_in_rate_bytes_per_second=mv.get("network_in_rate_bytes_per_second", 0.0),
+                network_out_rate_bytes_per_second=mv.get("network_out_rate_bytes_per_second", 0.0),
             ))
 
         return result
 
-    def _query_metric(
+    def _fill_disk_io_fallback(
         self,
-        instance_id: str,
-        metric_name: str,
+        instance_ids: list[str],
         start_time: int,
         end_time: int,
-    ) -> float | None:
-        request = cms_models.DescribeMetricListRequest(
+        cycle_id: int,
+        disk_io_values: dict[str, dict[str, dict[str, float]]],
+    ) -> None:
+        """对无Agent数据的实例查询基础磁盘IO指标，结果写入 disk_io_values"""
+        fallback_batches = self._build_dimensions(instance_ids)
+        futures: list[tuple[str, int, Future]] = []
+        for attr_name, metric_name in ALIYUN_DISK_IO_BASIC_METRICS.items():
+            priority = METRIC_PRIORITIES.get("disk_io", 5)
+            for batch_idx, (_, dims) in enumerate(fallback_batches):
+                future = self._pool.submit(
+                    self._query_metric_batch,
+                    metric_name, dims, start_time, end_time,
+                    priority=priority, cycle_id=cycle_id,
+                )
+                futures.append((attr_name, batch_idx, future))
+
+        for attr_name, batch_idx, future in futures:
+            try:
+                for iid, value in future.result().items():
+                    disk_io_values.setdefault(iid, {})
+                    disk_io_values[iid].setdefault(attr_name, {})["total"] = value
+            except Exception as e:
+                logger.error(
+                    "阿里云批量查询磁盘IO基础指标最终失败 (metric=%s, batch=%d): %s",
+                    attr_name, batch_idx, e,
+                )
+
+    @staticmethod
+    def _build_dimensions(
+        instance_ids: list[str],
+        batch_size: int = _BATCH_SIZE,
+    ) -> list[tuple[list[str], str]]:
+        """将实例ID列表分批，返回 [(批次实例ID列表, Dimensions JSON), ...]
+
+        阿里云 DescribeMetricList/DescribeMetricLast 的 Dimensions 参数
+        单次最多支持 50 个实例，超出需分批查询。
+        """
+        batches: list[tuple[list[str], str]] = []
+        for i in range(0, len(instance_ids), batch_size):
+            batch_ids = instance_ids[i:i + batch_size]
+            dims = json.dumps([{"instanceId": iid} for iid in batch_ids])
+            batches.append((batch_ids, dims))
+        return batches
+
+    def _query_cms_last(
+        self,
+        metric_name: str,
+        dimensions: str,
+        start_time: int,
+        end_time: int,
+    ) -> list[dict]:
+        """调用 DescribeMetricLast API，返回解析后的 datapoints 列表
+
+        使用 DescribeMetricLast 替代 DescribeMetricList：
+        - 仅返回最新数据点，减少数据传输量
+        - QPS 限制更高（30 vs 20）
+        - 分钟级数据自动回溯 2 小时，覆盖采集间隔
+        """
+        request = cms_models.DescribeMetricLastRequest(
             namespace="acs_ecs_dashboard",
             metric_name=metric_name,
-            dimensions=f"[{{\"instanceId\":\"{instance_id}\"}}]",
+            dimensions=dimensions,
             start_time=str(start_time),
             end_time=str(end_time),
             period="60",
         )
         runtime = util_models.RuntimeOptions()
         try:
-            response = self._cms_client.describe_metric_list_with_options(request, runtime)
+            response = self._cms_client.describe_metric_last_with_options(request, runtime)
         except Exception as e:
             logger.warning(
-                "阿里云 CMS 指标查询失败 (instance=%s, metric=%s): %s",
-                instance_id, metric_name, e,
+                "阿里云 CMS 指标查询失败 (metric=%s): %s",
+                metric_name, e,
             )
             raise
         datapoints_str = response.body.datapoints
         if not datapoints_str:
-            return None
+            return []
         try:
-            datapoints = json.loads(datapoints_str)
+            return json.loads(datapoints_str)
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning(
-                "阿里云 CMS 指标数据解析失败 (instance=%s, metric=%s): %s",
-                instance_id, metric_name, e,
+                "阿里云 CMS 指标数据解析失败 (metric=%s): %s",
+                metric_name, e,
             )
-            return None
-        if not datapoints:
-            return None
-        last_point = datapoints[-1]
-        return float(last_point.get("Value", last_point.get("Average", 0)))
+            return []
 
-    def _query_disk_usage(
+    def _query_metric_batch(
         self,
-        instance_id: str,
+        metric_name: str,
+        dimensions: str,
         start_time: int,
         end_time: int,
     ) -> dict[str, float]:
-        """查询每块磁盘的使用率，返回 {磁盘标识符: 使用率} 的映射
-
-        阿里云 diskusage_utilization 指标包含 device 维度：
-        - Linux: device 值为挂载路径（如 /, /data, /home）
-        - Windows: device 值为驱动器号（如 C:, D:）
-        """
-        request = cms_models.DescribeMetricListRequest(
-            namespace="acs_ecs_dashboard",
-            metric_name="diskusage_utilization",
-            dimensions=f"[{{\"instanceId\":\"{instance_id}\"}}]",
-            start_time=str(start_time),
-            end_time=str(end_time),
-            period="60",
-        )
-        runtime = util_models.RuntimeOptions()
-        try:
-            response = self._cms_client.describe_metric_list_with_options(request, runtime)
-        except Exception as e:
-            logger.warning(
-                "阿里云 CMS 磁盘指标查询失败 (instance=%s): %s",
-                instance_id, e,
-            )
-            raise
-        datapoints_str = response.body.datapoints
-        if not datapoints_str:
-            return {}
-        try:
-            datapoints = json.loads(datapoints_str)
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.warning(
-                "阿里云 CMS 磁盘指标数据解析失败 (instance=%s): %s",
-                instance_id, e,
-            )
-            return {}
-        if not datapoints:
-            return {}
-
-        # 按 device 维度分组，取每个磁盘最后一个数据点的值
-        disk_usage: dict[str, float] = {}
+        """批量查询单个指标（无device维度），返回 {instance_id: value}"""
+        datapoints = self._query_cms_last(metric_name, dimensions, start_time, end_time)
+        result: dict[str, float] = {}
         for point in datapoints:
-            device = point.get("device", "")
-            value = float(point.get("Value", point.get("Average", 0)))
-            if device:
-                # 同一磁盘可能有多条数据点，后出现的覆盖前面的（时间更晚）
-                disk_usage[device] = value
+            instance_id = point.get("instanceId", "")
+            if instance_id:
+                value = float(point.get("Value", point.get("Average", 0)))
+                result[instance_id] = value
+        return result
 
-        # 若无 device 维度（聚合数据），用 "total" 作为标识符
-        if not disk_usage and datapoints:
-            last_point = datapoints[-1]
-            value = float(last_point.get("Value", last_point.get("Average", 0)))
-            disk_usage["total"] = value
-
-        return disk_usage
-
-    def _query_disk_io(
+    def _query_metric_with_device_batch(
         self,
-        instance_id: str,
+        metric_name: str,
+        dimensions: str,
         start_time: int,
         end_time: int,
     ) -> dict[str, dict[str, float]]:
-        """查询每块磁盘的IO数据，返回 {指标名: {磁盘标识符: 值}} 的映射
+        """批量查询含device维度的指标，返回 {instance_id: {device: value}}
 
-        优先查询 Agent 指标（含 device 维度），无数据时回退到基础指标（实例级聚合）
+        适用于磁盘使用率和磁盘IO Agent指标，这些指标按 device 维度分组：
+        - Linux: device 为挂载路径（如 /, /data）
+        - Windows: device 为驱动器号（如 C:, D:）
+        - 无 device 维度时回退为 "total" 标识
         """
-        result: dict[str, dict[str, float]] = {
-            "disk_read_bps": {},
-            "disk_write_bps": {},
-            "disk_read_iops": {},
-            "disk_write_iops": {},
-        }
-
-        # 第一轮：尝试 Agent 指标（含 device 维度）
-        for attr_name, metric_name in ALIYUN_DISK_IO_AGENT_METRICS.items():
-            request = cms_models.DescribeMetricListRequest(
-                namespace="acs_ecs_dashboard",
-                metric_name=metric_name,
-                dimensions=f"[{{\"instanceId\":\"{instance_id}\"}}]",
-                start_time=str(start_time),
-                end_time=str(end_time),
-                period="60",
-            )
-            runtime = util_models.RuntimeOptions()
-            try:
-                response = self._cms_client.describe_metric_list_with_options(request, runtime)
-            except Exception as e:
-                logger.warning(
-                    "阿里云 CMS 磁盘IO Agent指标查询失败 (instance=%s, metric=%s): %s",
-                    instance_id, metric_name, e,
-                )
-                raise
-            datapoints_str = response.body.datapoints
-            if not datapoints_str:
-                continue
-            try:
-                datapoints = json.loads(datapoints_str)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            if not datapoints:
-                continue
-            for point in datapoints:
-                device = point.get("device", "")
-                value = float(point.get("Value", point.get("Average", 0)))
-                if device:
-                    result[attr_name][device] = value
-
-        # 若 Agent 指标获取到了按磁盘的数据，直接返回
-        if any(result.values()):
-            return result
-
-        # 第二轮：回退到基础指标（实例级聚合，无 device 维度）
-        for attr_name, metric_name in ALIYUN_DISK_IO_BASIC_METRICS.items():
-            request = cms_models.DescribeMetricListRequest(
-                namespace="acs_ecs_dashboard",
-                metric_name=metric_name,
-                dimensions=f"[{{\"instanceId\":\"{instance_id}\"}}]",
-                start_time=str(start_time),
-                end_time=str(end_time),
-                period="60",
-            )
-            runtime = util_models.RuntimeOptions()
-            try:
-                response = self._cms_client.describe_metric_list_with_options(request, runtime)
-            except Exception as e:
-                logger.warning(
-                    "阿里云 CMS 磁盘IO基础指标查询失败 (instance=%s, metric=%s): %s",
-                    instance_id, metric_name, e,
-                )
-                continue
-            datapoints_str = response.body.datapoints
-            if not datapoints_str:
-                continue
-            try:
-                datapoints = json.loads(datapoints_str)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            if not datapoints:
-                continue
-            last_point = datapoints[-1]
-            value = float(last_point.get("Value", last_point.get("Average", 0)))
-            result[attr_name]["total"] = value
-
+        datapoints = self._query_cms_last(metric_name, dimensions, start_time, end_time)
+        result: dict[str, dict[str, float]] = {}
+        for point in datapoints:
+            instance_id = point.get("instanceId", "")
+            device = point.get("device", "")
+            value = float(point.get("Value", point.get("Average", 0)))
+            if instance_id:
+                key = device if device else "total"
+                result.setdefault(instance_id, {})[key] = value
         return result
 
     def get_balance(self) -> BalanceInfo | None:
@@ -479,3 +435,75 @@ class AliyunProvider(CloudProvider):
             return float(value.replace(",", ""))
         except (TypeError, ValueError, AttributeError):
             return 0.0
+
+    def get_resource_packages(self) -> list[ResourcePackageInfo]:
+        page_num = 1
+        page_size = 300
+        all_packages: list[ResourcePackageInfo] = []
+        runtime = util_models.RuntimeOptions()
+
+        try:
+            while True:
+                request = bss_models.QueryResourcePackageInstancesRequest(
+                    page_num=page_num,
+                    page_size=page_size,
+                )
+                response = self._bss_client.query_resource_package_instances_with_options(request, runtime)
+                body = response.body
+                if not body.success:
+                    logger.warning(
+                        "阿里云查询资源包返回失败: code=%s, message=%s",
+                        body.code, body.message,
+                    )
+                    break
+
+                data = body.data
+                if not data or not data.instances or not data.instances.instance:
+                    break
+
+                for ins in data.instances.instance:
+                    if ins.status != "Available":
+                        continue
+
+                    total = self._parse_amount(ins.total_amount)
+                    remaining = self._parse_amount(ins.remaining_amount)
+                    total_unit = ins.total_amount_unit or ""
+                    remaining_unit = ins.remaining_amount_unit or ""
+
+                    # 单位不同时统一换算到同一单位再计算百分比
+                    total, remaining, unit = normalize_amounts(
+                        total, total_unit, remaining, remaining_unit,
+                    )
+
+                    if total > 0 and remaining <= 0:
+                        continue
+
+                    if total > 0:
+                        remaining_percent = min(remaining / total * 100, 100.0)
+                    else:
+                        remaining_percent = 100.0
+
+                    all_packages.append(ResourcePackageInfo(
+                        instance_id=ins.instance_id or "",
+                        name=ins.remark or "",
+                        region=ins.region or "",
+                        status=ins.status or "",
+                        total_amount=total,
+                        remaining_amount=remaining,
+                        remaining_percent=remaining_percent,
+                        unit=unit,
+                        effective_time=ins.effective_time or "",
+                        expiry_time=ins.expiry_time or "",
+                        commodity_code=ins.commodity_code or "",
+                    ))
+
+                total_count = int(data.total_count or 0)
+                if page_num * page_size >= total_count:
+                    break
+                page_num += 1
+
+            logger.info("阿里云获取资源包列表完成，共 %d 个", len(all_packages))
+            return all_packages
+        except Exception as e:
+            logger.error("阿里云查询资源包失败: %s", e)
+            return []

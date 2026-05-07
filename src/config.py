@@ -23,6 +23,7 @@ class ServerConfig:
 class CacheConfig:
     ttl_seconds: int = 60
     balance_cache_ttl_seconds: int = 1800
+    resource_package_cache_ttl_seconds: int = 1800
 
 
 @dataclass

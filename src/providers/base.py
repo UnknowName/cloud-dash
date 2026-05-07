@@ -46,6 +46,21 @@ class BalanceInfo:
 
 
 @dataclass
+class ResourcePackageInfo:
+    instance_id: str = ""
+    name: str = ""
+    region: str = ""
+    status: str = ""
+    total_amount: float = 0.0
+    remaining_amount: float = 0.0
+    remaining_percent: float = 100.0
+    unit: str = ""
+    effective_time: str = ""
+    expiry_time: str = ""
+    commodity_code: str = ""
+
+
+@dataclass
 class MetricResult:
     provider_name: str = ""
     provider_type: str = ""
@@ -165,6 +180,9 @@ class CloudProvider(ABC):
 
     def get_balance(self) -> BalanceInfo | None:
         return None
+
+    def get_resource_packages(self) -> list[ResourcePackageInfo]:
+        return []
 
     def collect(self) -> MetricResult:
         instances = self.get_instances()

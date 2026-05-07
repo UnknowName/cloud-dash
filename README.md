@@ -1,15 +1,17 @@
 # Cloud Dash
 
-多云平台 ECS 监控指标 Prometheus Exporter，支持阿里云和华为云，可一键接入 Prometheus + Grafana 监控体系。
+多云平台监控指标 Prometheus Exporter，支持阿里云和华为云，可一键接入 Prometheus + Grafana 监控体系。
 
 ## 功能特性
 
 - **多云平台支持** — 同时接入阿里云、华为云，统一暴露 Prometheus 格式指标
-- **ECS 全量指标** — CPU 利用率、内存利用率、磁盘利用率（按挂载点拆分）、网络出入速率
+- **ECS 全量指标** — CPU 利用率、内存利用率、磁盘利用率（按挂载点拆分）、磁盘 IO（读写吞吐/IOPS）、网络出入速率
+- **账户余额监控** — 采集云账户可用余额、现金余额、信用额度
+- **资源包监控** — 采集资源包总量、已用量、剩余百分比，支持单位自动换算
 - **实例列表本地缓存** — 避免频繁调用云 API 获取实例列表，降低 API 限流风险
 - **优先级线程池** — 按指标优先级调度采集任务，支持动态扩缩容和失败重试
 - **可配置采集间隔** — 支持 seconds / minutes / hours 灵活配置，运行时动态调整
-- **实例名称过滤** — 通过 `include_name` 只采集指定名称的实例
+- **多关键词实例过滤** — 通过 `include_name` 列表按 OR 逻辑匹配实例名称
 - **Grafana 仪表盘** — 内置开箱即用的监控仪表盘 JSON，含概览、趋势图、仪表盘、实例详情表
 - **RESTful 状态接口** — 提供 `/health` 健康检查和 `/api/v1/status` 运行状态查询
 
@@ -47,13 +49,13 @@ pip install -e ".[dev]"
 
 ### 3. 编辑配置文件
 
-复制并修改配置文件，填入你的云平台凭证：
+复制示例配置文件，填入你的云平台凭证：
 
 ```bash
-cp config.yaml config.local.yaml
+cp config.yaml.example config.yaml
 ```
 
-编辑 `config.local.yaml`，参考下方 [配置指南](#配置指南) 填写必要信息。
+编辑 `config.yaml`，参考下方 [配置指南](#配置指南) 填写必要信息。
 
 ### 4. 启动服务
 
@@ -99,7 +101,9 @@ server:
   port: 9100                    # 服务监听端口
 
 cache:
-  ttl_seconds: 60               # 指标缓存 TTL（秒）
+  ttl_seconds: 60               # ECS 指标缓存 TTL（秒）
+  balance_cache_ttl_seconds: 1800     # 余额指标缓存 TTL（秒）
+  resource_package_cache_ttl_seconds: 1800  # 资源包指标缓存 TTL（秒）
 
 # 实例列表本地文件缓存
 instance_cache:
@@ -125,7 +129,9 @@ providers:
   - type: aliyun                # 云平台类型：aliyun / huawei
     name: aliyun-prod           # 自定义名称，用于标识和缓存
     region: cn-shenzhen         # 区域 ID
-    include_name: "支付"         # 可选，只采集名称包含该字符串的实例
+    include_name:               # 可选，只采集名称包含列表中任一关键词的实例（OR 逻辑）
+      - "支付"
+      - "finance"
     credentials:
       access_key_id: "YOUR_AK"           # 必填
       access_key_secret: "YOUR_SK"       # 必填
@@ -141,6 +147,8 @@ providers:
 # 启用的采集器
 collectors:
   - ecs
+  - balance
+  - resource_package
 ```
 
 ### 配置项说明
@@ -148,7 +156,9 @@ collectors:
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `server.port` | int | 9100 | HTTP 服务监听端口 |
-| `cache.ttl_seconds` | int | 60 | 指标缓存 TTL |
+| `cache.ttl_seconds` | int | 60 | ECS 指标缓存 TTL |
+| `cache.balance_cache_ttl_seconds` | int | 1800 | 余额指标缓存 TTL |
+| `cache.resource_package_cache_ttl_seconds` | int | 1800 | 资源包指标缓存 TTL |
 | `instance_cache.enabled` | bool | true | 是否启用实例列表本地缓存 |
 | `instance_cache.ttl_seconds` | int | 86400 | 实例缓存有效期（秒） |
 | `instance_cache.dir` | string | "./cache/instances" | 缓存文件目录 |
@@ -158,25 +168,34 @@ collectors:
 | `thread_pool.max_retries` | int | 3 | 失败重试次数 |
 | `thread_pool.retry_delay` | float | 1.0 | 重试基础延迟（秒） |
 | `providers` | list | [] | 云平台配置列表 |
-| `collectors` | list | ["ecs"] | 启用的采集器列表 |
+| `providers[].include_name` | list[str] | [] | 实例名称过滤关键词（OR 逻辑），兼容旧版字符串格式 |
+| `collectors` | list | ["ecs"] | 启用的采集器列表，可选：ecs / balance / resource_package |
 
 ### 云平台凭证获取
 
 **阿里云**：
 1. 登录 [RAM 访问控制](https://ram.console.aliyun.com/)
-2. 创建用户并授予 `AliyunCloudMonitorReadOnlyAccess` 和 `AliyunECSReadOnlyAccess` 权限
+2. 创建用户并授予以下权限：
+   - `AliyunCloudMonitorReadOnlyAccess` — 云监控只读
+   - `AliyunECSReadOnlyAccess` — ECS 只读
+   - `AliyunBSSReadOnlyAccess` — 费用与账单只读（余额和资源包采集需要）
 3. 创建 AccessKey 并记录 ID 和 Secret
 
 **华为云**：
 1. 登录 [IAM](https://console.huaweicloud.com/iam/)
-2. 创建用户并授予 `CES ReadOnlyAccess` 和 `ECS ReadOnlyAccess` 权限
+2. 创建用户并授予以下权限：
+   - `CES ReadOnlyAccess` — 云监控只读
+   - `ECS ReadOnlyAccess` — ECS 只读
+   - `BSS ReadOnlyAccess` — 费用与账单只读（余额和资源包采集需要）
 3. 创建 AccessKey 并记录 AK、SK 和 Project ID
 
 > **安全提示**：请勿将凭证硬编码在配置文件中提交到版本库，建议使用环境变量或密钥管理服务。
 
 ## Prometheus 指标
 
-所有指标均带有以下标签：
+### ECS 指标
+
+所有 ECS 指标均带有以下标签：
 
 | 标签 | 说明 |
 |------|------|
@@ -185,15 +204,52 @@ collectors:
 | `instance_name` | 实例名称 |
 | `region` | 区域 |
 
-磁盘指标额外包含 `disk` 标签，标识挂载路径（如 `/`、`/data`、`C:`）。
+磁盘和磁盘 IO 指标额外包含 `disk` 标签，标识挂载路径（如 `/`、`/data`、`C:`）。无挂载点信息时回退为 `total`。
 
 | 指标名称 | 类型 | 说明 |
 |----------|------|------|
 | `cloud_ecs_cpu_utilization_percent` | Gauge | CPU 利用率（%） |
 | `cloud_ecs_memory_utilization_percent` | Gauge | 内存利用率（%） |
 | `cloud_ecs_disk_utilization_percent` | Gauge | 磁盘利用率（%），含 `disk` 标签 |
+| `cloud_ecs_disk_read_bps_bytes_per_second` | Gauge | 磁盘读吞吐（Bytes/s），含 `disk` 标签 |
+| `cloud_ecs_disk_write_bps_bytes_per_second` | Gauge | 磁盘写吞吐（Bytes/s），含 `disk` 标签 |
+| `cloud_ecs_disk_read_iops_per_second` | Gauge | 磁盘读 IOPS，含 `disk` 标签 |
+| `cloud_ecs_disk_write_iops_per_second` | Gauge | 磁盘写 IOPS，含 `disk` 标签 |
 | `cloud_ecs_network_in_rate_bytes_per_second` | Gauge | 网络入站速率（Bytes/s） |
 | `cloud_ecs_network_out_rate_bytes_per_second` | Gauge | 网络出站速率（Bytes/s） |
+
+### 账户余额指标
+
+| 标签 | 说明 |
+|------|------|
+| `cloud` | 云平台类型（aliyun / huawei） |
+| `provider_name` | Provider 自定义名称 |
+| `currency` | 币种（CNY） |
+
+| 指标名称 | 类型 | 说明 |
+|----------|------|------|
+| `cloud_account_available_amount` | Gauge | 账户可用余额（元） |
+| `cloud_account_available_cash_amount` | Gauge | 账户现金余额（元） |
+| `cloud_account_credit_amount` | Gauge | 信用额度（元） |
+
+### 资源包指标
+
+| 标签 | 说明 |
+|------|------|
+| `cloud` | 云平台类型（aliyun / huawei） |
+| `provider_name` | Provider 自定义名称 |
+| `package_name` | 资源包名称 |
+| `instance_id` | 资源包实例 ID |
+| `region` | 区域 |
+| `status` | 状态 |
+| `commodity_code` | 商品代码 |
+| `unit` | 计量单位 |
+
+| 指标名称 | 类型 | 说明 |
+|----------|------|------|
+| `cloud_resource_package_remaining_percent` | Gauge | 资源包剩余百分比（%） |
+| `cloud_resource_package_total_amount` | Gauge | 资源包总量 |
+| `cloud_resource_package_used_amount` | Gauge | 资源包已用量 |
 
 ## API 接口
 
@@ -239,7 +295,7 @@ collectors:
 ```
 cloud-dash/
 ├── main.py                     # 入口，初始化并启动服务
-├── config.yaml                 # 默认配置文件
+├── config.yaml.example         # 示例配置文件
 ├── pyproject.toml              # 项目元数据和依赖
 ├── dashboards/
 │   └── cloud-ecs-monitoring.json   # Grafana 仪表盘
@@ -253,11 +309,14 @@ cloud-dash/
     ├── instance_cache.py       # 实例列表文件缓存
     ├── collectors/
     │   ├── base.py             # 采集器基类
-    │   └── ecs.py              # ECS 指标采集器
+    │   ├── ecs.py              # ECS 指标采集器
+    │   ├── balance.py          # 账户余额采集器
+    │   └── resource_package.py # 资源包采集器
     └── providers/
         ├── base.py             # 云平台 Provider 基类
         ├── aliyun.py           # 阿里云 Provider
-        └── huawei.py           # 华为云 Provider
+        ├── huawei.py           # 华为云 Provider
+        └── unit_converter.py   # 资源包单位换算工具
 ```
 
 ## 架构设计
@@ -271,26 +330,30 @@ cloud-dash/
 ┌──────────────────────▼──────────────────────────────┐
 │                  MetricsCache                        │
 │  定时调度 → 调用各 Collector 采集 → 缓存指标          │
+│  (ECS 指标定时刷新，余额/资源包按独立 TTL 刷新)        │
 └──────────────────────┬──────────────────────────────┘
                        │
-┌──────────────────────▼──────────────────────────────┐
-│                EcsCollector                          │
-│  将各 Provider 的采集结果转为 Prometheus Gauge        │
-└──────────┬───────────────────────┬──────────────────┘
-           │                       │
-┌──────────▼──────────┐  ┌────────▼──────────────────┐
-│  AliyunProvider     │  │  HuaweiProvider           │
-│  ECS + CMS API      │  │  ECS + CES API            │
-│  PriorityThreadPool │  │  PriorityThreadPool        │
-└─────────────────────┘  └───────────────────────────┘
+┌──────────┬───────────┼──────────────┬───────────────┐
+│          │           │              │               │
+▼          ▼           ▼              ▼               ▼
+Ecs      Balance   ResourcePkg   ┌────────┐  ┌────────────┐
+Collector Collector  Collector   │Aliyun  │  │  Huawei    │
+│          │           │        │Provider│  │  Provider  │
+│          │           │        │ECS+CMS │  │  ECS+CES   │
+│          │           │        │+BSS API│  │  +BSS API  │
+│          │           │        │Priority│  │  Priority  │
+│          │           │        │ThreadPool│ │ThreadPool │
+└──────────┴───────────┴────────┴────────┘  └────────────┘
 ```
 
 核心设计要点：
 
-- **Provider 抽象**：通过 `CloudProvider` 基类统一接口，新增云平台只需实现 `list_instances()` 和 `get_metrics()`，并在 `PROVIDER_MAP` 注册
+- **Provider 抽象**：通过 `CloudProvider` 基类统一接口，新增云平台只需实现 `list_instances()`、`get_metrics()`、`get_balance()` 和 `get_resource_packages()`，并在 `PROVIDER_MAP` 注册
 - **Collector 抽象**：通过 `MetricCollector` 基类统一采集接口，新增资源类型只需实现 `collect()`，并在 `COLLECTOR_MAP` 注册
+- **缓存策略**：ECS 指标使用内存缓存（按采集间隔刷新）；余额和资源包指标按独立 TTL 刷新（默认 30 分钟），避免频繁调用费用 API
 - **优先级线程池**：CPU 指标优先级最高，网络指标最低；支持按采集间隔动态调整线程数
-- **缓存策略**：实例列表使用文件缓存（TTL 可配），监控指标使用内存缓存（按采集间隔刷新）
+- **实例列表缓存**：使用文件缓存（TTL 可配），默认 1 天有效，降低限流风险
+- **磁盘 IO 回退机制**：优先查询 Agent 指标（按挂载点拆分），无 Agent 时自动回退到基础指标（实例级聚合）
 
 ## 常见问题
 
@@ -307,17 +370,29 @@ cloud-dash/
 - **阿里云**：需要安装云监控插件才能获取 `device` 维度数据
 - **华为云**：需要安装 CES Agent 并确保 `mount_point` 维度信息可被发现；未安装 Agent 时回退到实例级聚合数据，显示为 `total`
 
+### 磁盘 IO 指标的数据来源是什么？
+
+磁盘 IO 指标（读写吞吐、IOPS）优先从云监控 Agent 采集，按挂载点拆分展示。若实例未安装 Agent，自动回退到基础指标（实例级聚合，`disk` 标签显示为 `total`）。
+
 ### 如何只监控部分实例？
 
-在 Provider 配置中使用 `include_name` 字段，只采集名称包含该字符串的实例：
+在 Provider 配置中使用 `include_name` 字段，支持多关键词 OR 逻辑匹配：
 
 ```yaml
 providers:
   - type: aliyun
     name: aliyun-prod
     region: cn-shenzhen
-    include_name: "生产"    # 只采集名称包含"生产"的实例
+    include_name:          # 实例名包含"生产"或"支付"任一关键词即采集
+      - "生产"
+      - "支付"
 ```
+
+单关键词时会在 API 侧过滤（更高效），多关键词时获取全部后本地过滤。也兼容旧版字符串格式。
+
+### 余额和资源包指标为什么刷新频率较低？
+
+余额和资源包变化频率远低于 ECS 监控指标，且费用类 API 调用频率限制更严格。默认缓存 TTL 为 1800 秒（30 分钟），可通过 `cache.balance_cache_ttl_seconds` 和 `cache.resource_package_cache_ttl_seconds` 调整。
 
 ### 采集任务失败会怎样？
 
@@ -325,7 +400,7 @@ providers:
 
 ### 如何扩展支持新的云平台？
 
-1. 在 `src/providers/` 下新建 Provider 类，继承 `CloudProvider`，实现 `list_instances()` 和 `get_metrics()`
+1. 在 `src/providers/` 下新建 Provider 类，继承 `CloudProvider`，实现 `list_instances()`、`get_metrics()`，可选实现 `get_balance()` 和 `get_resource_packages()`
 2. 在 [main.py](main.py) 的 `PROVIDER_MAP` 中注册新类型
 3. 在 `config.yaml` 的 `providers` 中添加对应配置
 

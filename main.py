@@ -8,6 +8,7 @@ from src.cache import MetricsCache
 from src.collectors.base import MetricCollector
 from src.collectors.ecs import EcsCollector
 from src.collectors.balance import BalanceCollector
+from src.collectors.resource_package import ResourcePackageCollector
 from src.config import load_config, ProviderConfig, ThreadPoolConfig, CollectionConfig, InstanceCacheConfig
 from src.exporter import Exporter
 from src.instance_cache import InstanceCache
@@ -31,6 +32,7 @@ PROVIDER_MAP: dict[str, type[CloudProvider]] = {
 COLLECTOR_MAP: dict[str, type[MetricCollector]] = {
     "ecs": EcsCollector,
     "balance": BalanceCollector,
+    "resource_package": ResourcePackageCollector,
 }
 
 
@@ -104,11 +106,12 @@ def main() -> None:
         if not collector_cls:
             logger.warning("未知的采集器类型: %s，跳过", name)
             continue
-        if name in ("ecs", "balance"):
-            if name == "balance":
-                collectors.append(collector_cls(providers, cache_ttl_seconds=config.cache.balance_cache_ttl_seconds))
-            else:
-                collectors.append(collector_cls(providers))
+        if name == "balance":
+            collectors.append(collector_cls(providers, cache_ttl_seconds=config.cache.balance_cache_ttl_seconds))
+        elif name == "resource_package":
+            collectors.append(collector_cls(providers, cache_ttl_seconds=config.cache.resource_package_cache_ttl_seconds))
+        elif name == "ecs":
+            collectors.append(collector_cls(providers))
         else:
             collectors.append(collector_cls())
     logger.info("已初始化 %d 个指标采集器", len(collectors))

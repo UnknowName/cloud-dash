@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from huaweicloudsdkbss.v2 import BssClient as HwBssClient
 from huaweicloudsdkbss.v2 import ShowCustomerAccountBalancesRequest
+from huaweicloudsdkbss.v2 import ListFreeResourceInfosRequest, ListFreeResourceInfosReq
 from huaweicloudsdkcore.auth.credentials import BasicCredentials
 from huaweicloudsdkecs.v2 import EcsClient as HwEcsClient
 from huaweicloudsdkecs.v2 import ListServersDetailsRequest
@@ -14,7 +15,7 @@ from huaweicloudsdkces.v1 import ShowMetricDataRequest
 from huaweicloudsdkces.v2 import CesClient as HwCesV2Client
 from huaweicloudsdkces.v2 import ListAgentDimensionInfoRequest
 
-from .base import CloudProvider, InstanceInfo, MetricData, BalanceInfo, DEFAULT_COLLECTION_INTERVAL_SECONDS
+from .base import CloudProvider, InstanceInfo, MetricData, BalanceInfo, ResourcePackageInfo, DEFAULT_COLLECTION_INTERVAL_SECONDS
 from ..pool import DEFAULT_MAX_WORKERS, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY
 from ..instance_cache import InstanceCache
 
@@ -502,3 +503,100 @@ class HuaweiProvider(CloudProvider):
             credit_amount=credit_amount,
             currency=currency,
         )
+
+    # 华为云资源包状态映射
+    _HW_PKG_STATUS_MAP = {
+        0: "Inactive",
+        1: "Available",
+        2: "Exhausted",
+        3: "Expired",
+        4: "Cancelled",
+    }
+
+    def get_resource_packages(self) -> list[ResourcePackageInfo]:
+        offset = 0
+        limit = 100
+        all_packages: list[ResourcePackageInfo] = []
+
+        try:
+            while True:
+                req_body = ListFreeResourceInfosReq(
+                    status=1,
+                    offset=offset,
+                    limit=limit,
+                )
+                request = ListFreeResourceInfosRequest(
+                    x_language="zh_CN",
+                    body=req_body,
+                )
+                response = self._bss_client.list_free_resource_infos(request)
+
+                packages = response.free_resource_packages
+                if not packages:
+                    break
+
+                for pkg in packages:
+                    status = pkg.status
+                    # 跳过非生效中状态：2=已用完, 3=已失效, 4=已退订
+                    if status != 1:
+                        continue
+
+                    status_str = self._HW_PKG_STATUS_MAP.get(status, "Unknown")
+                    # 华为云一个资源包可能包含多个资源项，每个资源项单独作为一条指标
+                    if pkg.free_resources:
+                        for res in pkg.free_resources:
+                            original = self._safe_float(res.original_amount)
+                            amount = self._safe_float(res.amount)
+                            # 有总量且剩余为0说明该资源项已用完，直接忽略
+                            if original > 0 and amount <= 0:
+                                continue
+
+                            if original > 0:
+                                remaining_percent = min(amount / original * 100, 100.0)
+                            else:
+                                remaining_percent = 100.0
+
+                            all_packages.append(ResourcePackageInfo(
+                                instance_id=pkg.order_instance_id or "",
+                                name=pkg.product_name or "",
+                                region=pkg.region_code or "",
+                                status=status_str,
+                                total_amount=original,
+                                remaining_amount=amount,
+                                remaining_percent=remaining_percent,
+                                unit=res.usage_type_name or "",
+                                effective_time=pkg.effective_time or "",
+                                expiry_time=pkg.expire_time or "",
+                                commodity_code=pkg.service_type_code or "",
+                            ))
+                    else:
+                        # 无资源项的资源包，展示为100%
+                        all_packages.append(ResourcePackageInfo(
+                            instance_id=pkg.order_instance_id or "",
+                            name=pkg.product_name or "",
+                            region=pkg.region_code or "",
+                            status=status_str,
+                            effective_time=pkg.effective_time or "",
+                            expiry_time=pkg.expire_time or "",
+                            commodity_code=pkg.service_type_code or "",
+                        ))
+
+                total_count = response.total_count or 0
+                if offset + limit >= total_count:
+                    break
+                offset += limit
+
+            logger.info("华为云获取资源包列表完成，共 %d 个", len(all_packages))
+            return all_packages
+        except Exception as e:
+            logger.error("华为云查询资源包失败: %s", e)
+            return []
+
+    @staticmethod
+    def _safe_float(value: str | None) -> float:
+        if not value:
+            return 0.0
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
