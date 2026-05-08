@@ -1839,7 +1839,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "系统盘利用率C"
+              "options": "系统盘利用率"
             },
             "properties": [
               {
@@ -1905,7 +1905,7 @@
         "sortBy": [
           {
             "desc": true,
-            "displayName": "CPU 利用率"
+            "displayName": "CPU利用率"
           }
         ]
       },
@@ -1988,26 +1988,28 @@
               "region #D": true,
               "instance_name #B": true,
               "instance_name #C": true,
-              "instance_name #D": true
+              "instance_name #D": true,
+              "disk": true,
+              "disk #D": true
             },
             "indexByName": {
               "云厂商": 0,
               "区域": 1,
               "实例ID": 2,
-              "instance_name": 3,
+              "实例名称": 3,
               "CPU利用率": 4,
               "内存利用率": 5,
-              "系统盘利用率C": 6,
+              "系统盘利用率": 6,
               "数据盘利用率": 7
             },
             "renameByName": {
               "cloud": "云厂商",
               "region": "区域",
               "instance_id": "实例ID",
-              "instance_name": "instance_name",
+              "instance_name": "实例名称",
               "Value #A": "CPU利用率",
               "Value #B": "内存利用率",
-              "Value #C": "系统盘利用率C",
+              "Value #C": "系统盘利用率",
               "Value #D": "数据盘利用率"
             }
           }

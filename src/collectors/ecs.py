@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import math
-
 from prometheus_client.core import GaugeMetricFamily
 
 from .base import MetricCollector
+from .utils import safe_float
 from ..providers.base import CloudProvider, MetricResult
 
 ECS_METRICS = {
@@ -26,19 +25,6 @@ DISK_IO_METRICS = {
 LABEL_NAMES = ["cloud", "instance_id", "instance_name", "region"]
 
 DISK_LABEL_NAMES = ["cloud", "instance_id", "instance_name", "region", "disk"]
-
-
-def _safe_float(value: object) -> float:
-    """将指标值安全转换为有效浮点数，确保符合 Prometheus 规范"""
-    if value is None:
-        return 0.0
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    if math.isinf(f) or math.isnan(f):
-        return f
-    return f
 
 
 class EcsCollector(MetricCollector):
@@ -71,19 +57,19 @@ class EcsCollector(MetricCollector):
                 # 非磁盘指标：直接取标量值
                 for attr_name, gauge in gauges.items():
                     raw_value = getattr(metric_data, attr_name, 0.0)
-                    gauge.add_metric(base_labels, _safe_float(raw_value))
+                    gauge.add_metric(base_labels, safe_float(raw_value))
 
                 # 磁盘指标：遍历每块磁盘，添加 disk 标签
                 for disk_id, usage_percent in metric_data.disk_usage.items():
                     disk_labels = base_labels + [disk_id]
-                    disk_gauge.add_metric(disk_labels, _safe_float(usage_percent))
+                    disk_gauge.add_metric(disk_labels, safe_float(usage_percent))
 
                 # 磁盘IO指标：遍历每块磁盘，添加 disk 标签
                 for attr_name, gauge in disk_io_gauges.items():
                     disk_io_data = getattr(metric_data, attr_name, {})
                     for disk_id, value in disk_io_data.items():
                         disk_labels = base_labels + [disk_id]
-                        gauge.add_metric(disk_labels, _safe_float(value))
+                        gauge.add_metric(disk_labels, safe_float(value))
 
         result_gauges = list(gauges.values())
         result_gauges.append(disk_gauge)

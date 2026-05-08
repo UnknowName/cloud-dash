@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import logging
-import math
 import time
 
 from prometheus_client.core import GaugeMetricFamily
 
 from .base import MetricCollector
+from .utils import safe_float
 from ..providers.base import CloudProvider
 
 logger = logging.getLogger(__name__)
@@ -81,10 +81,10 @@ class ResourcePackageCollector(MetricCollector):
                     pkg.commodity_code,
                     pkg.unit,
                 ]
-                gauges["remaining_percent"].add_metric(labels, _safe_float(pkg.remaining_percent))
-                gauges["total_amount"].add_metric(labels, _safe_float(pkg.total_amount))
+                gauges["remaining_percent"].add_metric(labels, safe_float(pkg.remaining_percent))
+                gauges["total_amount"].add_metric(labels, safe_float(pkg.total_amount))
                 used = max(pkg.total_amount - pkg.remaining_amount, 0.0)
-                gauges["used_amount"].add_metric(labels, _safe_float(used))
+                gauges["used_amount"].add_metric(labels, safe_float(used))
                 has_any_data = True
 
         new_metrics = list(gauges.values())
@@ -106,15 +106,3 @@ def _build_gauges() -> dict[str, GaugeMetricFamily]:
     for attr_name, (metric_name, help_text) in RESOURCE_PACKAGE_METRICS.items():
         gauges[attr_name] = GaugeMetricFamily(metric_name, help_text, labels=LABEL_NAMES)
     return gauges
-
-
-def _safe_float(value: object) -> float:
-    if value is None:
-        return 0.0
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    if math.isinf(f) or math.isnan(f):
-        return 0.0
-    return f

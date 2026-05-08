@@ -8,12 +8,17 @@ from huaweicloudsdkbss.v2 import BssClient as HwBssClient
 from huaweicloudsdkbss.v2 import ShowCustomerAccountBalancesRequest
 from huaweicloudsdkbss.v2 import ListFreeResourceInfosRequest, ListFreeResourceInfosReq
 from huaweicloudsdkcore.auth.credentials import BasicCredentials
+from huaweicloudsdkcore.http.http_config import HttpConfig
 from huaweicloudsdkecs.v2 import EcsClient as HwEcsClient
 from huaweicloudsdkecs.v2 import ListServersDetailsRequest
+from huaweicloudsdkecs.v2.region.ecs_region import EcsRegion
 from huaweicloudsdkces.v1 import CesClient as HwCesV1Client
 from huaweicloudsdkces.v1 import ShowMetricDataRequest
+from huaweicloudsdkces.v1.region.ces_region import CesRegion as CesV1Region
 from huaweicloudsdkces.v2 import CesClient as HwCesV2Client
 from huaweicloudsdkces.v2 import ListAgentDimensionInfoRequest
+from huaweicloudsdkces.v2.region.ces_region import CesRegion as CesV2Region
+from huaweicloudsdkbss.v2.region.bss_region import BssRegion
 
 from .base import CloudProvider, InstanceInfo, MetricData, BalanceInfo, ResourcePackageInfo, DEFAULT_COLLECTION_INTERVAL_SECONDS
 from ..pool import DEFAULT_MAX_WORKERS, DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY
@@ -81,9 +86,6 @@ class HuaweiProvider(CloudProvider):
         self._bss_client = self._create_bss_client()
 
     def _create_ecs_client(self) -> HwEcsClient:
-        from huaweicloudsdkcore.http.http_config import HttpConfig
-        from huaweicloudsdkecs.v2.region.ecs_region import EcsRegion
-
         config = HttpConfig.get_default_config()
         config.ignore_ssl_verification = True
         return (HwEcsClient.new_builder()
@@ -93,34 +95,24 @@ class HuaweiProvider(CloudProvider):
                 .build())
 
     def _create_ces_v1_client(self) -> HwCesV1Client:
-        from huaweicloudsdkcore.http.http_config import HttpConfig
-        from huaweicloudsdkces.v1.region.ces_region import CesRegion
-
         config = HttpConfig.get_default_config()
         config.ignore_ssl_verification = True
         return (HwCesV1Client.new_builder()
                 .with_credentials(self._credentials)
-                .with_region(CesRegion.value_of(self.region))
+                .with_region(CesV1Region.value_of(self.region))
                 .with_http_config(config)
                 .build())
 
     def _create_ces_v2_client(self) -> HwCesV2Client:
-        from huaweicloudsdkcore.http.http_config import HttpConfig
-        from huaweicloudsdkces.v2.region.ces_region import CesRegion
-
         config = HttpConfig.get_default_config()
         config.ignore_ssl_verification = True
         return (HwCesV2Client.new_builder()
                 .with_credentials(self._credentials)
-                .with_region(CesRegion.value_of(self.region))
+                .with_region(CesV2Region.value_of(self.region))
                 .with_http_config(config)
                 .build())
 
     def _create_bss_client(self) -> HwBssClient:
-        # BSS 为全局服务，使用 cn-north-1 区域
-        from huaweicloudsdkcore.http.http_config import HttpConfig
-        from huaweicloudsdkbss.v2.region.bss_region import BssRegion
-
         config = HttpConfig.get_default_config()
         config.ignore_ssl_verification = True
         return (HwBssClient.new_builder()
@@ -173,6 +165,11 @@ class HuaweiProvider(CloudProvider):
 
         cycle_id = self.begin_collection_cycle()
 
+        # 预获取所有实例的挂载点信息，避免后续重复调用 _discover_mount_points
+        mount_points_cache: dict[str, list[tuple[str, str]]] = {}
+        for instance in instances:
+            mount_points_cache[instance.instance_id] = self._discover_mount_points(instance.instance_id)
+
         # 非磁盘指标：每个实例每个指标提交一个查询任务
         futures: dict[tuple[str, str], Future] = {}
         for instance in instances:
@@ -186,30 +183,60 @@ class HuaweiProvider(CloudProvider):
                 )
                 futures[(instance.instance_id, attr_name)] = future
 
-        # 磁盘指标：每个实例提交一个查询任务，返回每块磁盘的使用率
-        disk_futures: dict[str, Future] = {}
+        # 磁盘使用率：每个实例每个挂载点提交一个独立查询任务，实现并行
+        disk_usage_futures: dict[tuple[str, str], Future] = {}
         for instance in instances:
-            priority = METRIC_PRIORITIES.get("disk_usage", 5)
-            future = self._pool.submit(
-                self._query_disk_usage,
-                instance.instance_id, from_time, to_time,
-                priority=priority,
-                cycle_id=cycle_id,
-            )
-            disk_futures[instance.instance_id] = future
+            mount_points = mount_points_cache.get(instance.instance_id, [])
+            if mount_points:
+                for mp_hash, mp_path in mount_points:
+                    priority = METRIC_PRIORITIES.get("disk_usage", 5)
+                    future = self._pool.submit(
+                        self._query_single_disk_usage,
+                        instance.instance_id, mp_hash, mp_path, from_time, to_time,
+                        priority=priority,
+                        cycle_id=cycle_id,
+                    )
+                    disk_usage_futures[(instance.instance_id, mp_path)] = future
+            else:
+                # 无挂载点时回退到实例级聚合查询
+                priority = METRIC_PRIORITIES.get("disk_usage", 5)
+                future = self._pool.submit(
+                    self._query_aggregate_disk_usage,
+                    instance.instance_id, from_time, to_time,
+                    priority=priority,
+                    cycle_id=cycle_id,
+                )
+                disk_usage_futures[(instance.instance_id, "total")] = future
 
-        # 磁盘IO指标：每个实例提交一个查询任务，返回每块磁盘的IO数据
-        disk_io_futures: dict[str, Future] = {}
+        # 磁盘IO指标：每个实例每个挂载点每个指标提交一个独立查询任务，实现并行
+        disk_io_futures: dict[tuple[str, str, str], Future] = {}
         for instance in instances:
-            priority = METRIC_PRIORITIES.get("disk_io", 5)
-            future = self._pool.submit(
-                self._query_disk_io,
-                instance.instance_id, from_time, to_time,
-                priority=priority,
-                cycle_id=cycle_id,
-            )
-            disk_io_futures[instance.instance_id] = future
+            mount_points = mount_points_cache.get(instance.instance_id, [])
+            if mount_points:
+                for mp_hash, mp_path in mount_points:
+                    for attr_name, metric_name in HUAWEI_DISK_IO_AGENT_METRICS.items():
+                        priority = METRIC_PRIORITIES.get("disk_io", 5)
+                        future = self._pool.submit(
+                            self._query_single_disk_io,
+                            instance.instance_id, metric_name, mp_hash, mp_path,
+                            from_time, to_time,
+                            priority=priority,
+                            cycle_id=cycle_id,
+                        )
+                        disk_io_futures[(instance.instance_id, attr_name, mp_path)] = future
+            else:
+                # 无挂载点时回退到基础指标
+                for attr_name, metric_name in HUAWEI_DISK_IO_BASIC_METRICS.items():
+                    priority = METRIC_PRIORITIES.get("disk_io", 5)
+                    future = self._pool.submit(
+                        self._query_metric,
+                        instance.instance_id, metric_name, from_time, to_time,
+                        priority=priority,
+                        cycle_id=cycle_id,
+                    )
+                    disk_io_futures[(instance.instance_id, attr_name, "total")] = future
 
+        # 收集基础指标结果
         result = []
         for instance in instances:
             metric_values: dict[str, float] = {}
@@ -227,37 +254,41 @@ class HuaweiProvider(CloudProvider):
                         attr_name, instance.instance_id, e,
                     )
 
-            # 获取每块磁盘的使用率
+            # 收集磁盘使用率结果
             disk_usage: dict[str, float] = {}
-            disk_future = disk_futures.get(instance.instance_id)
-            if disk_future:
+            for key, future in disk_usage_futures.items():
+                iid, mp_path = key
+                if iid != instance.instance_id:
+                    continue
                 try:
-                    disk_result = disk_future.result()
-                    if disk_result is not None:
-                        disk_usage = disk_result
+                    value = future.result()
+                    if value is not None:
+                        disk_usage[mp_path] = value
                 except Exception as e:
                     logger.error(
-                        "华为云查询磁盘使用率最终失败 (instance=%s): %s",
-                        instance.instance_id, e,
+                        "华为云查询磁盘使用率最终失败 (instance=%s, mount=%s): %s",
+                        instance.instance_id, mp_path, e,
                     )
 
-            # 获取每块磁盘的IO数据
+            # 收集磁盘IO结果
             disk_io_data: dict[str, dict[str, float]] = {
                 "disk_read_bps": {},
                 "disk_write_bps": {},
                 "disk_read_iops": {},
                 "disk_write_iops": {},
             }
-            disk_io_future = disk_io_futures.get(instance.instance_id)
-            if disk_io_future:
+            for key, future in disk_io_futures.items():
+                iid, attr_name, mp_path = key
+                if iid != instance.instance_id:
+                    continue
                 try:
-                    disk_io_result = disk_io_future.result()
-                    if disk_io_result is not None:
-                        disk_io_data = disk_io_result
+                    value = future.result()
+                    if value is not None:
+                        disk_io_data[attr_name][mp_path] = value
                 except Exception as e:
                     logger.error(
-                        "华为云查询磁盘IO最终失败 (instance=%s): %s",
-                        instance.instance_id, e,
+                        "华为云查询磁盘IO最终失败 (instance=%s, metric=%s, mount=%s): %s",
+                        instance.instance_id, attr_name, mp_path, e,
                     )
 
             if not metric_values and not disk_usage and not any(disk_io_data.values()):
@@ -300,47 +331,36 @@ class HuaweiProvider(CloudProvider):
             return None
         return float(datapoints[-1].average)
 
-    def _query_disk_usage(
+    def _query_single_disk_usage(
         self,
         instance_id: str,
+        mount_point_hash: str,
+        mount_point_path: str,
         from_time: str,
         to_time: str,
-    ) -> dict[str, float]:
-        """查询每块磁盘的使用率，返回 {磁盘标识符: 使用率} 的映射
-
-        华为云 disk_util_inband 指标包含 mount_point 维度：
-        - Linux: mount_point 的 origin_value 为挂载路径（如 /, /data, /home）
-        - Windows: mount_point 的 origin_value 为驱动器号（如 C:, D:）
-        """
-        mount_points = self._discover_mount_points(instance_id)
-        if not mount_points:
-            # 无挂载点信息时回退到实例级聚合查询
-            return self._query_aggregate_disk_usage(instance_id, from_time, to_time)
-
-        disk_usage: dict[str, float] = {}
-        for mount_point_hash, mount_point_path in mount_points:
-            try:
-                request = ShowMetricDataRequest(
-                    metric_name="disk_util_inband",
-                    namespace="SYS.ECS",
-                    dim_0=f"instance_id,{instance_id}",
-                    dim_1=f"mount_point,{mount_point_hash}",
-                    _from=from_time,
-                    to=to_time,
-                    period=1,
-                    filter="average",
-                )
-                response = self._ces_v1_client.show_metric_data(request)
-                datapoints = response.datapoints
-                if datapoints:
-                    disk_usage[mount_point_path] = float(datapoints[-1].average)
-            except Exception as e:
-                logger.warning(
-                    "华为云查询挂载点 %s 磁盘使用率失败 (instance=%s): %s",
-                    mount_point_path, instance_id, e,
-                )
-
-        return disk_usage
+    ) -> float | None:
+        """查询单个挂载点的磁盘使用率"""
+        try:
+            request = ShowMetricDataRequest(
+                metric_name="disk_util_inband",
+                namespace="SYS.ECS",
+                dim_0=f"instance_id,{instance_id}",
+                dim_1=f"mount_point,{mount_point_hash}",
+                _from=from_time,
+                to=to_time,
+                period=1,
+                filter="average",
+            )
+            response = self._ces_v1_client.show_metric_data(request)
+            datapoints = response.datapoints
+            if datapoints:
+                return float(datapoints[-1].average)
+        except Exception as e:
+            logger.warning(
+                "华为云查询挂载点 %s 磁盘使用率失败 (instance=%s): %s",
+                mount_point_path, instance_id, e,
+            )
+        return None
 
     def _discover_mount_points(self, instance_id: str) -> list[tuple[str, str]]:
         """发现实例的挂载点维度信息，返回 [(哈希值, 实际路径), ...] 的列表
@@ -377,8 +397,8 @@ class HuaweiProvider(CloudProvider):
         instance_id: str,
         from_time: str,
         to_time: str,
-    ) -> dict[str, float]:
-        """回退方案：查询实例级聚合磁盘使用率，用 'total' 作为标识符"""
+    ) -> float | None:
+        """回退方案：查询实例级聚合磁盘使用率"""
         try:
             request = ShowMetricDataRequest(
                 metric_name="disk_util_inband",
@@ -392,80 +412,45 @@ class HuaweiProvider(CloudProvider):
             response = self._ces_v1_client.show_metric_data(request)
             datapoints = response.datapoints
             if datapoints:
-                return {"total": float(datapoints[-1].average)}
+                return float(datapoints[-1].average)
         except Exception as e:
             logger.warning(
                 "华为云查询聚合磁盘使用率失败 (instance=%s): %s",
                 instance_id, e,
             )
-        return {}
+        return None
 
-    def _query_disk_io(
+    def _query_single_disk_io(
         self,
         instance_id: str,
+        metric_name: str,
+        mount_point_hash: str,
+        mount_point_path: str,
         from_time: str,
         to_time: str,
-    ) -> dict[str, dict[str, float]]:
-        """查询每块磁盘的IO数据，返回 {指标名: {磁盘标识符: 值}} 的映射
-
-        优先通过挂载点维度查询 Agent 指标，无挂载点时回退到基础指标
-        """
-        result: dict[str, dict[str, float]] = {
-            "disk_read_bps": {},
-            "disk_write_bps": {},
-            "disk_read_iops": {},
-            "disk_write_iops": {},
-        }
-
-        mount_points = self._discover_mount_points(instance_id)
-        if mount_points:
-            # 有挂载点信息：对每个挂载点查询 Agent 指标
-            for mount_point_hash, mount_point_path in mount_points:
-                for attr_name, metric_name in HUAWEI_DISK_IO_AGENT_METRICS.items():
-                    try:
-                        request = ShowMetricDataRequest(
-                            metric_name=metric_name,
-                            namespace="SYS.ECS",
-                            dim_0=f"instance_id,{instance_id}",
-                            dim_1=f"mount_point,{mount_point_hash}",
-                            _from=from_time,
-                            to=to_time,
-                            period=1,
-                            filter="average",
-                        )
-                        response = self._ces_v1_client.show_metric_data(request)
-                        datapoints = response.datapoints
-                        if datapoints:
-                            result[attr_name][mount_point_path] = float(datapoints[-1].average)
-                    except Exception as e:
-                        logger.warning(
-                            "华为云查询挂载点 %s 磁盘IO失败 (instance=%s, metric=%s): %s",
-                            mount_point_path, instance_id, metric_name, e,
-                        )
-        else:
-            # 无挂载点信息：回退到基础指标（实例级聚合）
-            for attr_name, metric_name in HUAWEI_DISK_IO_BASIC_METRICS.items():
-                try:
-                    request = ShowMetricDataRequest(
-                        metric_name=metric_name,
-                        namespace="SYS.ECS",
-                        dim_0=f"instance_id,{instance_id}",
-                        _from=from_time,
-                        to=to_time,
-                        period=1,
-                        filter="average",
-                    )
-                    response = self._ces_v1_client.show_metric_data(request)
-                    datapoints = response.datapoints
-                    if datapoints:
-                        result[attr_name]["total"] = float(datapoints[-1].average)
-                except Exception as e:
-                    logger.warning(
-                        "华为云查询基础磁盘IO失败 (instance=%s, metric=%s): %s",
-                        instance_id, metric_name, e,
-                    )
-
-        return result
+    ) -> float | None:
+        """查询单个挂载点的单个磁盘IO指标"""
+        try:
+            request = ShowMetricDataRequest(
+                metric_name=metric_name,
+                namespace="SYS.ECS",
+                dim_0=f"instance_id,{instance_id}",
+                dim_1=f"mount_point,{mount_point_hash}",
+                _from=from_time,
+                to=to_time,
+                period=1,
+                filter="average",
+            )
+            response = self._ces_v1_client.show_metric_data(request)
+            datapoints = response.datapoints
+            if datapoints:
+                return float(datapoints[-1].average)
+        except Exception as e:
+            logger.warning(
+                "华为云查询挂载点 %s 磁盘IO失败 (instance=%s, metric=%s): %s",
+                mount_point_path, instance_id, metric_name, e,
+            )
+        return None
 
     # 华为云账户类型映射：1=余额, 2=信用, 5=奖励金, 7=保证金
     _ACCOUNT_TYPE_BALANCE = 1

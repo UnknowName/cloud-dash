@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from prometheus_client.core import GaugeMetricFamily
@@ -42,6 +43,11 @@ class MetricsCache:
         self._lock = threading.Lock()
         # 每个采集器独立缓存，key 为采集器类名
         self._collector_cache: dict[str, list[GaugeMetricFamily]] = {}
+        # 采集器并行执行线程池，线程数等于采集器数量（通常不超过5个）
+        self._executor = ThreadPoolExecutor(
+            max_workers=max(len(collectors), 1),
+            thread_name_prefix="collector",
+        )
 
         # 调度控制：使用 Event + 循环替代 Timer 链，支持动态间隔和精确唤醒
         self._stop_event = threading.Event()
@@ -80,6 +86,7 @@ class MetricsCache:
         if self._scheduler_thread and self._scheduler_thread.is_alive():
             self._scheduler_thread.join(timeout=10.0)
         self._scheduler_thread = None
+        self._executor.shutdown(wait=False)
         logger.info("缓存刷新服务已停止")
 
     def update_interval(self, new_interval_seconds: int) -> None:
@@ -147,10 +154,17 @@ class MetricsCache:
 
         logger.debug("开始第 %d 轮采集", cycle_id)
 
+        # 并行提交所有采集器任务，减少总采集耗时
+        future_to_name: dict = {}
         for collector in self._cached_collectors:
             collector_name = collector.__class__.__name__
+            future = self._executor.submit(collector.collect)
+            future_to_name[future] = collector_name
+
+        for future in as_completed(future_to_name):
+            collector_name = future_to_name[future]
             try:
-                collected = collector.collect()
+                collected = future.result()
                 with self._lock:
                     self._collector_cache[collector_name] = collected
             except Exception as e:

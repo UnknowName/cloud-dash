@@ -5,6 +5,7 @@ import time
 from prometheus_client.core import GaugeMetricFamily
 
 from .base import MetricCollector
+from .utils import safe_float
 from ..providers.base import CloudProvider
 
 BALANCE_METRICS = {
@@ -47,7 +48,7 @@ class BalanceCollector(MetricCollector):
             labels = [provider.provider_type, provider.name, balance.currency]
             for attr_name, gauge in gauges.items():
                 value = getattr(balance, attr_name, 0.0)
-                gauge.add_metric(labels, _safe_float(value))
+                gauge.add_metric(labels, safe_float(value))
 
         self._cached_metrics = list(gauges.values())
         self._cache_timestamp = now
@@ -59,15 +60,3 @@ def _build_gauges() -> dict[str, GaugeMetricFamily]:
     for attr_name, (metric_name, help_text) in BALANCE_METRICS.items():
         gauges[attr_name] = GaugeMetricFamily(metric_name, help_text, labels=LABEL_NAMES)
     return gauges
-
-
-def _safe_float(value: object) -> float:
-    if value is None:
-        return 0.0
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    if f != f:  # NaN check
-        return 0.0
-    return f

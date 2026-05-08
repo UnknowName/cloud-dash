@@ -58,7 +58,7 @@ class InstanceCache:
             "instances": [asdict(ins) for ins in instances],
         }
         try:
-            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
             logger.info("实例列表已写入本地缓存: provider=%s, 实例数=%d", provider_name, len(instances))
         except OSError as e:
             logger.error("写入实例缓存失败: %s, 原因: %s", path, e)
